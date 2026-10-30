@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wifi, Copy, Check, Users, Play, Crown, LogOut, MessageSquare, Send, Sparkles, Shield, UserMinus, ArrowLeft, Flame, AlertCircle } from 'lucide-react';
+import { Wifi, Copy, Check, Users, Play, Crown, LogOut, MessageSquare, Send, Sparkles, Shield, UserMinus, ArrowLeft, Flame, AlertCircle, PlusCircle, LogIn } from 'lucide-react';
 import { socket } from '../services/socketClient';
 import { RoomState, Player, GameInfo } from '../types/game';
 import { GAMES_CATALOG } from '../data/gamesCatalog';
@@ -36,12 +36,16 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
 
   // Guest Setup Form State
   const profile = getUserProfile();
+  const [mode, setMode] = useState<'create' | 'join'>(
+    initialAction === 'join' || (initialRoomCode && initialRoomCode.trim().length > 0) ? 'join' : 'create'
+  );
   const [playerName, setPlayerName] = useState(profile.username || 'ولاع_الجمعة');
   const [selectedAvatar, setSelectedAvatar] = useState(profile.avatar || '🔥');
   const [roomCodeInput, setRoomCodeInput] = useState(initialRoomCode);
   const [selectedGameId, setSelectedGameId] = useState(initialGame?.id || 'barrah_salfa');
   const [chatInput, setChatInput] = useState('');
   const [showChat, setShowChat] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const myPlayerId = socket.getPlayerId();
 
@@ -50,6 +54,7 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
     socket.connect();
 
     const unsubscribe = socket.subscribe((msg: any) => {
+      setIsSubmitting(false);
       if (msg.type === 'joined') {
         setIsInRoom(true);
         setRoom(msg.room);
@@ -69,11 +74,11 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
       }
     });
 
-    // Auto trigger if initialRoomCode provided
-    if (initialAction === 'create') {
-      // ready to click create
-    } else if (initialAction === 'join' && initialRoomCode) {
+    if (initialAction === 'join' && initialRoomCode) {
       setRoomCodeInput(initialRoomCode);
+      setMode('join');
+    } else if (initialAction === 'create') {
+      setMode('create');
     }
 
     return () => {
@@ -82,19 +87,33 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
   }, [initialAction, initialRoomCode]);
 
   // Create Room Trigger
-  const handleCreateRoom = (e: React.FormEvent) => {
+  const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playerName.trim()) return;
+    if (!playerName.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    setErrorMessage(null);
     sounds.playSpark();
-    socket.createRoom(playerName.trim(), selectedAvatar, selectedGameId);
+    try {
+      await socket.createRoom(playerName.trim(), selectedAvatar, selectedGameId);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      setErrorMessage(err?.message || 'حدث خطأ أثناء إنشاء الغرفة. يرجى إعادة المحاولة.');
+    }
   };
 
   // Join Room Trigger
-  const handleJoinRoom = (e: React.FormEvent) => {
+  const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playerName.trim() || !roomCodeInput.trim()) return;
+    if (!playerName.trim() || !roomCodeInput.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    setErrorMessage(null);
     sounds.playSpark();
-    socket.joinRoom(roomCodeInput.trim(), playerName.trim(), selectedAvatar);
+    try {
+      await socket.joinRoom(roomCodeInput.trim(), playerName.trim(), selectedAvatar);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      setErrorMessage(err?.message || 'تعذر الاتصال بالغرفة، تأكد من الرمز.');
+    }
   };
 
   // Copy share invite link
@@ -183,9 +202,46 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
               </div>
             </div>
 
+            {/* Tab Selector: Create Room vs Join with Code */}
+            <div className="grid grid-cols-2 p-1 rounded-2xl bg-black/60 border border-purple-800/60 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('create');
+                  setErrorMessage(null);
+                  sounds.playSpark();
+                }}
+                className={`py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  mode === 'create'
+                    ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg shadow-orange-500/25'
+                    : 'text-purple-300 hover:text-white'
+                }`}
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>إنشاء غرفة جديدة</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('join');
+                  setErrorMessage(null);
+                  sounds.playSpark();
+                }}
+                className={`py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  mode === 'join'
+                    ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg shadow-orange-500/25'
+                    : 'text-purple-300 hover:text-white'
+                }`}
+              >
+                <LogIn className="w-4 h-4" />
+                <span>انضمام برمز</span>
+              </button>
+            </div>
+
             {/* If Join Mode */}
-            {initialAction === 'join' || roomCodeInput ? (
-              <form onSubmit={handleJoinRoom} className="space-y-4 pt-2">
+            {mode === 'join' ? (
+              <form onSubmit={handleJoinRoom} className="space-y-4 pt-1">
                 <div>
                   <label className="block text-xs font-bold text-purple-300 mb-1.5">رمز الغرفة (5 خانات):</label>
                   <input
@@ -200,15 +256,25 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
 
                 <button
                   type="submit"
-                  disabled={!playerName.trim() || roomCodeInput.trim().length < 4}
-                  className="w-full py-3.5 rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-black text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer"
+                  disabled={!playerName.trim() || roomCodeInput.trim().length < 4 || isSubmitting}
+                  className="w-full py-3.5 rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-black text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
-                  انضمام للغرفة الآن ➔
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>جاري الاتصال بالغرفة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <LogIn className="w-4 h-4" />
+                      <span>انضمام للغرفة الآن ➔</span>
+                    </>
+                  )}
                 </button>
               </form>
             ) : (
               /* Create Room Form */
-              <form onSubmit={handleCreateRoom} className="space-y-4 pt-2">
+              <form onSubmit={handleCreateRoom} className="space-y-4 pt-1">
                 <div>
                   <label className="block text-xs font-bold text-purple-300 mb-1.5">اختر اللعبة الافتتاحية:</label>
                   <select
@@ -226,10 +292,20 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
 
                 <button
                   type="submit"
-                  disabled={!playerName.trim()}
-                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 disabled:opacity-50 text-white font-black text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer"
+                  disabled={!playerName.trim() || isSubmitting}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 disabled:opacity-50 text-white font-black text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
-                  إنشاء الغرفة وبدء الدعوة 🔥
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>جاري إنشاء الغرفة وتجهيز الجلسة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Flame className="w-4 h-4" />
+                      <span>إنشاء الغرفة وبدء الدعوة 🔥</span>
+                    </>
+                  )}
                 </button>
               </form>
             )}
