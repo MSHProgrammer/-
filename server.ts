@@ -17,6 +17,11 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.json());
 
+// Google Search Console Site Verification
+app.get('/google778ed8bd9063b365.html', (req, res) => {
+  res.type('text/html').send('google-site-verification: google778ed8bd9063b365.html');
+});
+
 // In-memory Room State Store
 interface ServerPlayer {
   id: string;
