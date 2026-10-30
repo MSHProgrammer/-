@@ -1,0 +1,8 @@
+{
+  "name": "جَمْر | JAMR - ولّع جمعتكم",
+  "description": "منصة ألعاب جماعية عربية متكاملة للجمعات والأصدقاء والعائلة، تدعم اللعب أونلاين بغرف خاصة متزامنة أو أوفلاين على جهاز واحد.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
