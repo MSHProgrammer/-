@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Eye, EyeOff, Moon, Sun, Skull, HeartPulse, Search, Vote, Trophy, Clock, ArrowRight, RotateCcw, AlertTriangle, Users } from 'lucide-react';
+import { Shield, Eye, EyeOff, Moon, Sun, Skull, HeartPulse, Search, Vote, Trophy, Clock, ArrowRight, RotateCcw, AlertTriangle, Users, Trash2 } from 'lucide-react';
 import { sound } from '../../services/soundFx';
 import confetti from 'canvas-confetti';
 import { Player } from '../../types/game';
@@ -30,8 +30,23 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
   onOnlineAction,
   onExit
 }) => {
+  // Pre-game Player Roster Setup
+  const [playerList, setPlayerList] = useState<Array<{ id: string; name: string; avatar: string }>>(() => {
+    if (players && players.length >= 3) {
+      return players.map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '👤' }));
+    }
+    return [
+      { id: 'p1', name: 'حمد', avatar: '🦁' },
+      { id: 'p2', name: 'محمد', avatar: '🦅' },
+      { id: 'p3', name: 'خالد', avatar: '🐺' },
+      { id: 'p4', name: 'سعد', avatar: '🐆' },
+      { id: 'p5', name: 'سلطان', avatar: '👑' }
+    ];
+  });
+  const [newPlayerName, setNewPlayerName] = useState('');
+
   // Offline Setup / Match State
-  const [phase, setPhase] = useState<'role_reveal' | 'night' | 'day_announcement' | 'day_discussion' | 'day_voting' | 'game_over'>('role_reveal');
+  const [phase, setPhase] = useState<'setup' | 'role_reveal' | 'night' | 'day_announcement' | 'day_discussion' | 'day_voting' | 'game_over'>('setup');
   const [mafiaRoster, setMafiaRoster] = useState<MafiaPlayer[]>([]);
   const [currentRevealIdx, setCurrentRevealIdx] = useState(0);
   const [cardRevealed, setCardRevealed] = useState(false);
@@ -51,9 +66,34 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
   const [eliminatedPlayer, setEliminatedPlayer] = useState<MafiaPlayer | null>(null);
   const [winner, setWinner] = useState<'citizens' | 'mafia' | null>(null);
 
-  // Initialize Roles
-  useEffect(() => {
-    const list: MafiaPlayer[] = players.map(p => ({
+  // Add / remove players in pre-game
+  const handleAddPlayer = () => {
+    const trimmed = newPlayerName.trim();
+    if (!trimmed) return;
+    const avatars = ['🦁', '🦅', '🐺', '🐆', '🦊', '🐯', '🐼', '🐻', '🦉', '👑', '🎩', '🕵️'];
+    const randomAvatar = avatars[Math.floor(Math.random() * avatars.length)];
+    setPlayerList(prev => [...prev, { id: 'p_' + Date.now(), name: trimmed, avatar: randomAvatar }]);
+    setNewPlayerName('');
+    sound.playClick();
+  };
+
+  const handleRemovePlayer = (id: string) => {
+    if (playerList.length <= 3) {
+      alert('يجب أن يكون عدد اللاعبين 3 على الأقل في لعبة مافيا!');
+      return;
+    }
+    setPlayerList(prev => prev.filter(p => p.id !== id));
+    sound.playClick();
+  };
+
+  // Start role assignment from custom playerList
+  const handleStartRoleDistribution = () => {
+    if (playerList.length < 3) {
+      alert('الحد الأدنى للعب مافيا هو 3 لاعبين!');
+      return;
+    }
+
+    const list: MafiaPlayer[] = playerList.map(p => ({
       id: p.id,
       name: p.name,
       avatar: p.avatar,
@@ -85,7 +125,8 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
     setCurrentRevealIdx(0);
     setCardRevealed(false);
     setPhase('role_reveal');
-  }, [players]);
+    sound.playClick();
+  };
 
   // Timer countdown for discussion
   useEffect(() => {
@@ -233,6 +274,95 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
           الخروج للقائمة الرئيسية
         </button>
       </div>
+
+      {/* ================= 0. PRE-GAME PLAYERS SETUP ================= */}
+      {phase === 'setup' && (
+        <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-[#210924] via-[#15051a] to-[#0c0310] border-2 border-red-500/50 shadow-2xl space-y-6 animate-in fade-in">
+          <div className="flex items-center justify-between border-b border-red-900/40 pb-4">
+            <div className="flex items-center gap-2.5">
+              <span className="text-2xl">👥</span>
+              <div>
+                <h3 className="text-xl font-black text-white">إعداد لاعبي مافيا</h3>
+                <p className="text-xs text-red-300">حدد أسماء اللاعبين المشاركين قبل بدء توزيع الأدوار السرية</p>
+              </div>
+            </div>
+            <span className="text-xs font-bold px-3 py-1 rounded-full bg-red-950/60 text-red-300 border border-red-800/60 font-mono">
+              {playerList.length} لاعبين
+            </span>
+          </div>
+
+          {/* Current Roster */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-red-400" />
+                <span>قائمة اللاعبين المشاركين:</span>
+              </label>
+              <span className="text-[11px] text-purple-300">الحد الأدنى 3 لاعبين</span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              {playerList.map((player, idx) => (
+                <div
+                  key={player.id}
+                  className="p-3 rounded-2xl bg-black/50 border border-red-900/50 flex items-center justify-between shadow-inner"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="text-lg">{player.avatar}</span>
+                    <span className="text-xs font-black text-white truncate">{player.name}</span>
+                  </div>
+                  {playerList.length > 3 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePlayer(player.id)}
+                      className="text-red-400 hover:text-red-300 p-1 cursor-pointer transition-colors"
+                      title="حذف اللاعب"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Add Player Input */}
+            <div className="flex gap-2 pt-2">
+              <input
+                type="text"
+                value={newPlayerName}
+                onChange={e => setNewPlayerName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleAddPlayer()}
+                placeholder="أدخل اسم لاعب جديد (مثال: ناصر، فيصل...)"
+                className="flex-1 bg-black/60 border border-red-900/60 rounded-2xl px-4 py-2.5 text-xs text-white placeholder:text-purple-400/40 focus:outline-hidden focus:border-red-400"
+              />
+              <button
+                type="button"
+                onClick={handleAddPlayer}
+                disabled={!newPlayerName.trim()}
+                className="px-5 py-2.5 bg-red-950/80 hover:bg-red-900 disabled:opacity-40 text-red-200 font-black text-xs rounded-2xl border border-red-700 cursor-pointer flex items-center gap-1.5"
+              >
+                <span>+ إضافة لاعب</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Role Distribution Info Guide */}
+          <div className="p-4 rounded-2xl bg-red-950/30 border border-red-800/40 text-xs space-y-1 text-purple-200">
+            <div className="font-black text-red-300">🎭 توزيع الأدوار الآلي:</div>
+            <p className="text-[11px] text-purple-300/90 leading-relaxed">
+              يقوم الراوي الآلي بتوزيع الأدوار بالسر التام حسب عدد اللاعبين: (عضو مافيا 🕵️، طبيب منقذ 🩺، محقق سري 🔍، ومواطنون صالحون 🕊️).
+            </p>
+          </div>
+
+          {/* Start Role Reveal */}
+          <button
+            onClick={handleStartRoleDistribution}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 via-orange-600 to-red-600 hover:from-red-500 hover:to-orange-500 text-white font-black text-base shadow-xl shadow-red-600/30 cursor-pointer transition-transform active:scale-[0.98]"
+          >
+            توزيع الأدوار بالسر وبدء اللعبة ➔
+          </button>
+        </div>
+      )}
 
       {/* ================= 1. SECRET ROLE REVEAL ================= */}
       {phase === 'role_reveal' && mafiaRoster[currentRevealIdx] && (
@@ -521,12 +651,23 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
             ))}
           </div>
 
-          <button
-            onClick={onExit}
-            className="w-full max-w-md py-4 rounded-2xl bg-yellow-400 hover:bg-yellow-300 text-black font-black text-sm shadow-xl shadow-yellow-400/30 cursor-pointer"
-          >
-            العودة للقائمة الرئيسية 🏆
-          </button>
+          <div className="flex gap-3 justify-center max-w-md mx-auto">
+            <button
+              onClick={() => {
+                sound.playClick();
+                setPhase('setup');
+              }}
+              className="flex-1 py-3.5 rounded-2xl bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 text-white font-black text-xs cursor-pointer shadow-lg shadow-red-600/30"
+            >
+              جولة جديدة وتعديل اللاعبين 🔄
+            </button>
+            <button
+              onClick={onExit}
+              className="flex-1 py-3.5 rounded-2xl bg-yellow-400 hover:bg-yellow-300 text-black font-black text-xs shadow-xl shadow-yellow-400/30 cursor-pointer"
+            >
+              العودة للقائمة الرئيسية 🏆
+            </button>
+          </div>
         </div>
       )}
     </div>

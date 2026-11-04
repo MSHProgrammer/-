@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { sound } from '../../services/soundFx';
 import confetti from 'canvas-confetti';
-import { ALL_100_JAMRAIN_TOPICS, JamrainTopicItem, JamrainTopicQuestion } from '../../data/jamrain100Topics';
+import { ALL_100_JAMRAIN_TOPICS, JamrainTopicItem, JamrainTopicQuestion, drawRandomQuestionForTopic } from '../../data/jamrain100Topics';
 import { JamrainIllustration } from './JamrainIllustrations';
 import { QuestionPoints } from '../../types/jamr';
 
@@ -27,19 +27,16 @@ interface TeamState {
 }
 
 export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
-  // 100 Topics Selection State
-  // Default first 6 match the image: عالم الحيوان, علوم, مثلجات, معلومات عامة, كأس العالم, اختيارات
-  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>([
-    't-animals',
-    't-science',
-    't-snacks',
-    't-general',
-    't-worldcup',
-    't-choices'
-  ]);
+  // 100 Topics Selection State: Each team picks 3 topics (Total = 6 topics)
+  const [team1TopicIds, setTeam1TopicIds] = useState<string[]>(['t-animals', 't-science', 't-snacks']);
+  const [team2TopicIds, setTeam2TopicIds] = useState<string[]>(['t-general', 't-worldcup', 't-choices']);
+  const [activePickerTeam, setActivePickerTeam] = useState<0 | 1>(0);
   const [showTopicPicker, setShowTopicPicker] = useState<boolean>(false);
   const [topicSearch, setTopicSearch] = useState<string>('');
   const [topicCategoryFilter, setTopicCategoryFilter] = useState<string>('all');
+
+  // Combined 6 topics for the board
+  const selectedTopicIds = [...team1TopicIds, ...team2TopicIds];
 
   // Teams Setup
   const [teams, setTeams] = useState<[TeamState, TeamState]>([
@@ -73,11 +70,12 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
     tileKey: string;
   } | null>(null);
 
+  // Modal Stage: 'question' -> 'answer_revealed' -> 'scoring_decision'
+  const [questionStage, setQuestionStage] = useState<'question' | 'answer_revealed' | 'scoring_decision'>('question');
+
   const [timerSeconds, setTimerSeconds] = useState(60);
   const [timerRunning, setTimerRunning] = useState(false);
-  const [answerRevealed, setAnswerRevealed] = useState(false);
   const [activeLifeline, setActiveLifeline] = useState<'call_friend' | 'two_answers' | 'pitfall' | null>(null);
-  const [isStealChance, setIsStealChance] = useState(false);
   const [winnerTeam, setWinnerTeam] = useState<string | null>(null);
 
   // Retrieve current active 6 topic objects
@@ -88,12 +86,12 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
   // Timer Countdown Effect
   useEffect(() => {
     let interval: any = null;
-    if (timerRunning && timerSeconds > 0 && !answerRevealed) {
+    if (timerRunning && timerSeconds > 0 && questionStage === 'question') {
       interval = setInterval(() => {
         setTimerSeconds(s => {
           if (s <= 1) {
             setTimerRunning(false);
-            handleTimeExpired();
+            sound.playTick(true);
             return 0;
           }
           if (s <= 5) sound.playTick(true);
@@ -103,7 +101,10 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [timerRunning, timerSeconds, answerRevealed]);
+  }, [timerRunning, timerSeconds, questionStage]);
+
+  // Keep track of used questions to avoid repetition
+  const [usedQuestionIds] = useState<Set<string>>(() => new Set());
 
   // Handle tile click on board
   const handleTileClick = (topicIdx: number, side: 'left' | 'right', points: QuestionPoints) => {
@@ -113,14 +114,8 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
     const topic = active6Topics[topicIdx];
     if (!topic) return;
 
-    // Get specific question
-    const qKey = `${side}${points}` as keyof typeof topic.questions;
-    const qData = topic.questions[qKey] || {
-      points,
-      question: `سؤال في مجال ${topic.title} بقيمة ${points} نقطة`,
-      answer: `الإجابة المعتمدة لهذا السؤال في موضوع ${topic.title}`,
-      hints: ['تلميح: فكر في المعنى الأساسي أو الأثر التاريخي']
-    };
+    // Draw dynamically from the 20 questions pool for that topic & difficulty tier
+    const qData = drawRandomQuestionForTopic(topic, points, usedQuestionIds);
 
     sound.playTileSelect();
     setActiveQuestion({
@@ -132,23 +127,10 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
       tileKey
     });
 
+    setQuestionStage('question');
     setTimerSeconds(60);
     setTimerRunning(true);
-    setAnswerRevealed(false);
     setActiveLifeline(null);
-    setIsStealChance(false);
-  };
-
-  const handleTimeExpired = () => {
-    sound.playWrong();
-    if (!isStealChance) {
-      // Offer steal chance to the opposing team
-      setIsStealChance(true);
-      setTimerSeconds(30);
-      setTimerRunning(true);
-    } else {
-      setAnswerRevealed(true);
-    }
   };
 
   const handleUseLifeline = (type: 'call_friend' | 'two_answers' | 'pitfall') => {
@@ -169,76 +151,86 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
     }
   };
 
-  const handleScoreQuestion = (isCorrect: boolean) => {
+  // Resolve question with the 3 choices: 'none' (محد جاوب), 0 (فريق 1 جاوب), 1 (فريق 2 جاوب)
+  const handleResolveQuestion = (winner: 'none' | 0 | 1) => {
     if (!activeQuestion) return;
     const tileKey = activeQuestion.tileKey;
-    const answeringTeamIdx = isStealChance ? (activeTeamIdx === 0 ? 1 : 0) : activeTeamIdx;
-    const opposingTeamIdx = answeringTeamIdx === 0 ? 1 : 0;
     const points = activeQuestion.points;
 
-    if (isCorrect) {
-      sound.playCorrect();
+    if (winner === 'none') {
+      sound.playWrong();
+      setSolvedTiles(prev => ({
+        ...prev,
+        [tileKey]: { winner: 'missed', points }
+      }));
+    } else {
+      sound.playVictory();
+      confetti({ particleCount: 50, spread: 60, origin: { y: 0.6 } });
+      const opposingTeamIdx = winner === 0 ? 1 : 0;
+
       setTeams(prev => {
         const next = [...prev] as [TeamState, TeamState];
         if (activeLifeline === 'pitfall') {
           // Pitfall: Double points for winner, opponent loses points!
-          next[answeringTeamIdx].score += points * 2;
+          next[winner].score += points * 2;
           next[opposingTeamIdx].score = Math.max(0, next[opposingTeamIdx].score - points);
         } else {
-          next[answeringTeamIdx].score += points;
+          next[winner].score += points;
         }
         return next;
       });
 
       setSolvedTiles(prev => ({
         ...prev,
-        [tileKey]: { winner: answeringTeamIdx, points }
+        [tileKey]: { winner, points }
       }));
-
-      // Switch turn to opposing team
-      setActiveTeamIdx(prev => (prev === 0 ? 1 : 0));
-      setActiveQuestion(null);
-    } else {
-      sound.playWrong();
-      if (!isStealChance) {
-        // Offer steal to opposing team
-        setIsStealChance(true);
-        setTimerSeconds(30);
-        setTimerRunning(true);
-      } else {
-        // Both failed
-        setSolvedTiles(prev => ({
-          ...prev,
-          [tileKey]: { winner: 'missed', points }
-        }));
-        // Switch turn
-        setActiveTeamIdx(prev => (prev === 0 ? 1 : 0));
-        setActiveQuestion(null);
-      }
     }
+
+    // Switch turn to opposing team
+    setActiveTeamIdx(prev => (prev === 0 ? 1 : 0));
+    setActiveQuestion(null);
   };
 
-  // Random 6 Topics Picker
-  const handlePickRandom6 = () => {
+  // Random 3 topics for each team (Total 6)
+  const handlePickRandom3ForEach = () => {
     sound.playClick();
     const shuffled = [...ALL_100_JAMRAIN_TOPICS].sort(() => 0.5 - Math.random());
-    const random6 = shuffled.slice(0, 6).map(t => t.id);
-    setSelectedTopicIds(random6);
+    setTeam1TopicIds(shuffled.slice(0, 3).map(t => t.id));
+    setTeam2TopicIds(shuffled.slice(3, 6).map(t => t.id));
     setSolvedTiles({});
   };
 
-  // Toggle single topic selection
+  // Toggle topic selection for active team (up to 3)
   const handleToggleTopic = (id: string) => {
     sound.playClick();
-    if (selectedTopicIds.includes(id)) {
-      if (selectedTopicIds.length <= 1) return;
-      setSelectedTopicIds(prev => prev.filter(tId => tId !== id));
-    } else {
-      if (selectedTopicIds.length >= 6) {
-        // Replace last
-        setSelectedTopicIds(prev => [...prev.slice(0, 5), id]);
+    if (activePickerTeam === 0) {
+      if (team1TopicIds.includes(id)) {
+        if (team1TopicIds.length <= 1) return;
+        setTeam1TopicIds(prev => prev.filter(tId => tId !== id));
       } else {
-        setSelectedTopicIds(prev => [...prev, id]);
+        if (team2TopicIds.includes(id)) {
+          // If already chosen by team 2, swap out
+          setTeam2TopicIds(prev => prev.filter(tId => tId !== id));
+        }
+        if (team1TopicIds.length >= 3) {
+          setTeam1TopicIds(prev => [...prev.slice(0, 2), id]);
+        } else {
+          setTeam1TopicIds(prev => [...prev, id]);
+        }
+      }
+    } else {
+      if (team2TopicIds.includes(id)) {
+        if (team2TopicIds.length <= 1) return;
+        setTeam2TopicIds(prev => prev.filter(tId => tId !== id));
+      } else {
+        if (team1TopicIds.includes(id)) {
+          setTeam1TopicIds(prev => prev.filter(tId => tId !== id));
+        }
+        if (team2TopicIds.length >= 3) {
+          setTeam2TopicIds(prev => [...prev.slice(0, 2), id]);
+        } else {
+          setTeam2TopicIds(prev => [...prev, id]);
+        }
       }
     }
   };
@@ -504,11 +496,11 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
       </div>
 
       {/* ========================================================================= */}
-      {/* 4. ACTIVE QUESTION POPUP MODAL                                           */}
+      {/* 4. ACTIVE QUESTION MODAL (QUESTION -> REVEAL -> KAMIL -> 3 OPTIONS)       */}
       {/* ========================================================================= */}
       {activeQuestion && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
-          <div className="max-w-2xl w-full bg-gradient-to-b from-[#1e1338] via-[#150a28] to-[#0c0418] border-2 border-amber-500/60 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl text-right text-white">
+          <div className="max-w-2xl w-full bg-gradient-to-b from-[#1e1338] via-[#150a28] to-[#0c0418] border-2 border-amber-500/60 rounded-3xl p-6 sm:p-8 space-y-5 shadow-2xl text-right text-white">
             
             {/* Header info */}
             <div className="flex items-center justify-between border-b border-purple-800/40 pb-4">
@@ -537,16 +529,16 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
               </div>
             </div>
 
-            {/* Steal alert if active */}
-            {isStealChance && (
-              <div className="p-3 rounded-2xl bg-red-500/20 border border-red-500/50 text-red-300 flex items-center justify-between text-xs font-black animate-pulse">
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4" />
-                  <span>فرصة سرقة النقاط لفريق: {teams[activeTeamIdx === 0 ? 1 : 0].name}!</span>
-                </div>
-                <span>30 ثانية</span>
+            {/* Turn & Team Participation Notice */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-2 p-3 rounded-2xl bg-black/40 border border-purple-800/40 text-xs font-bold text-center">
+              <div className="flex items-center gap-1.5">
+                <span className="text-purple-300">دور الإجابة:</span>
+                <span className="text-amber-400 font-black">{teams[activeTeamIdx].name}</span>
               </div>
-            )}
+              <div className="text-[11px] text-purple-300/80 bg-purple-950/60 px-3 py-1 rounded-full border border-purple-800/40">
+                💡 جواب {teams[activeTeamIdx === 0 ? 1 : 0].name} اختياري للمنافسة والتجهيز
+              </div>
+            </div>
 
             {/* Lifeline Notice */}
             {activeLifeline && (
@@ -564,52 +556,96 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
               </h3>
             </div>
 
-            {/* Hints if available */}
-            {activeQuestion.qData.hints && activeQuestion.qData.hints.length > 0 && !answerRevealed && (
+            {/* Hints if available and not revealed */}
+            {activeQuestion.qData.hints && activeQuestion.qData.hints.length > 0 && questionStage === 'question' && (
               <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-800/30 text-xs text-purple-200">
                 <span className="font-black text-amber-400 ml-1">💡 تلميح:</span>
                 <span>{activeQuestion.qData.hints[0]}</span>
               </div>
             )}
 
-            {/* Answer Box (Hidden until revealed) */}
-            {answerRevealed ? (
-              <div className="p-4 rounded-2xl bg-emerald-950/40 border-2 border-emerald-500/60 text-center animate-in zoom-in-95">
-                <div className="text-xs font-bold text-emerald-400 mb-1">الإجابة النموذجية المعتمدة:</div>
-                <div className="text-xl sm:text-2xl font-black text-white">{activeQuestion.qData.answer}</div>
-              </div>
-            ) : (
+            {/* ================= STAGE 1: REVEAL ANSWER BUTTON ================= */}
+            {questionStage === 'question' && (
               <button
-                onClick={() => { sound.playClick(); setAnswerRevealed(true); }}
-                className="w-full py-3 rounded-2xl bg-purple-900/40 hover:bg-purple-800/60 border border-purple-700/50 text-purple-200 font-black text-xs transition-colors cursor-pointer"
+                onClick={() => {
+                  sound.playClick();
+                  setTimerRunning(false);
+                  setQuestionStage('answer_revealed');
+                }}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-black text-sm shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2"
               >
-                👁️ كشف الإجابة للجميع
+                <span>👁️ إظهار الإجابة</span>
               </button>
             )}
 
-            {/* Scoring Action Buttons */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                onClick={() => handleScoreQuestion(true)}
-                className="py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-black font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95 cursor-pointer"
-              >
-                <CheckCircle2 className="w-5 h-5" />
-                <span>إجابة صحيحة (+{activeQuestion.points})</span>
-              </button>
+            {/* ================= STAGE 2: ANSWER REVEALED + 'كمل' BUTTON ================= */}
+            {questionStage === 'answer_revealed' && (
+              <div className="space-y-4 animate-in zoom-in-95">
+                <div className="p-5 rounded-2xl bg-emerald-950/50 border-2 border-emerald-500 text-center space-y-1">
+                  <span className="text-xs font-bold text-emerald-400 block">الإجابة المعتمدة لهذا السؤال:</span>
+                  <div className="text-xl sm:text-2xl font-black text-white">{activeQuestion.qData.answer}</div>
+                </div>
 
-              <button
-                onClick={() => handleScoreQuestion(false)}
-                className="py-3.5 rounded-2xl bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95 cursor-pointer"
-              >
-                <XCircle className="w-5 h-5" />
-                <span>{isStealChance ? 'إجابة خاطئة (ضاع السؤال)' : 'إجابة خاطئة (فرصة سرقة)'}</span>
-              </button>
-            </div>
+                <button
+                  onClick={() => {
+                    sound.playClick();
+                    setQuestionStage('scoring_decision');
+                  }}
+                  className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 hover:scale-[1.01] text-black font-black text-base shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>كَمّل ➔</span>
+                </button>
+              </div>
+            )}
 
-            {/* Close without penalty */}
+            {/* ================= STAGE 3: THE 3 CHOICES (محد جاوب / الفريق 1 جاوب / الفريق 2 جاوب) ================= */}
+            {questionStage === 'scoring_decision' && (
+              <div className="space-y-4 animate-in zoom-in-95">
+                <div className="text-center">
+                  <h4 className="text-base font-black text-white">من جاوب على السؤال بشكل صحيح؟</h4>
+                  <p className="text-xs text-purple-300 mt-0.5">
+                    اختر الفريق الفائز بنقاط هذا السؤال (+{activeQuestion.points}) أو اختر "محد جاوب"
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                  {/* Choice 1: محد جاوب */}
+                  <button
+                    onClick={() => handleResolveQuestion('none')}
+                    className="py-4 px-3 rounded-2xl bg-red-950/60 hover:bg-red-900/80 border-2 border-red-500/60 text-red-200 font-black text-xs sm:text-sm flex flex-col items-center justify-center gap-1.5 shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                  >
+                    <span className="text-lg">❌</span>
+                    <span>محد جاوب</span>
+                    <span className="text-[10px] text-red-300/80 font-normal">لا تحسب نقاط</span>
+                  </button>
+
+                  {/* Choice 2: الفريق الأول جاوب */}
+                  <button
+                    onClick={() => handleResolveQuestion(0)}
+                    className="py-4 px-3 rounded-2xl bg-gradient-to-b from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 border-2 border-amber-300 text-black font-black text-xs sm:text-sm flex flex-col items-center justify-center gap-1.5 shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                  >
+                    <span className="text-lg">🏆</span>
+                    <span>{teams[0].name} جاوب</span>
+                    <span className="text-[10px] text-black/80 font-bold">+{activeQuestion.points} نقطة</span>
+                  </button>
+
+                  {/* Choice 3: الفريق الثاني جاوب */}
+                  <button
+                    onClick={() => handleResolveQuestion(1)}
+                    className="py-4 px-3 rounded-2xl bg-gradient-to-b from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 border-2 border-purple-400 text-white font-black text-xs sm:text-sm flex flex-col items-center justify-center gap-1.5 shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                  >
+                    <span className="text-lg">🏆</span>
+                    <span>{teams[1].name} جاوب</span>
+                    <span className="text-[10px] text-purple-200 font-bold">+{activeQuestion.points} نقطة</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Cancel & return to board */}
             <button
               onClick={() => setActiveQuestion(null)}
-              className="w-full py-2 text-xs text-purple-400 hover:text-white transition-colors cursor-pointer"
+              className="w-full py-2 text-xs text-purple-400 hover:text-white transition-colors cursor-pointer text-center pt-2"
             >
               إلغاء السؤال والعودة للوحة
             </button>
@@ -619,7 +655,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
       )}
 
       {/* ========================================================================= */}
-      {/* 5. TOPIC PICKER MODAL (100 TOPICS SELECTION)                             */}
+      {/* 5. TOPIC PICKER MODAL (100 TOPICS - 3 FOR TEAM 1 + 3 FOR TEAM 2)         */}
       {/* ========================================================================= */}
       {showTopicPicker && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
@@ -630,20 +666,20 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
               <div>
                 <h3 className="text-xl font-black text-white flex items-center gap-2">
                   <Sparkles className="w-5 h-5 text-amber-400" />
-                  <span>اختيار مواضيع جَمْرَيْن (اختر 6 من أصل 100 موضوع)</span>
+                  <span>اختيار مواضيع جَمْرَيْن (100 موضوع - يختار كل فريق 3 مواضيع)</span>
                 </h3>
                 <p className="text-xs text-purple-300 mt-1">
-                  اختر المواضيع الستة التي تناسب جلستكم وديوانيتكم أو اضغط اختيار عشوائي للتشويق!
+                  كل فريق يختار 3 مواضيع تناسبه في جلستكم، لتصبح اللوحة مكوّنة من 6 مواضيع مشتركة!
                 </p>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={handlePickRandom6}
+                  onClick={handlePickRandom3ForEach}
                   className="px-3.5 py-1.5 rounded-xl bg-amber-500 text-black font-black text-xs shadow-md hover:bg-amber-400 transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <Shuffle className="w-4 h-4" />
-                  <span>اختيار عشوائي (6)</span>
+                  <span>عشوائي (3 لكل فريق)</span>
                 </button>
                 <button
                   onClick={() => setShowTopicPicker(false)}
@@ -652,6 +688,43 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                   ✕
                 </button>
               </div>
+            </div>
+
+            {/* Team Picker Tabs */}
+            <div className="grid grid-cols-2 gap-3 mb-4 p-1 rounded-2xl bg-black/40 border border-purple-800/60">
+              <button
+                type="button"
+                onClick={() => setActivePickerTeam(0)}
+                className={`py-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  activePickerTeam === 0
+                    ? 'bg-amber-400 text-black shadow-md'
+                    : 'text-purple-300 hover:text-white'
+                }`}
+              >
+                <span>مواضيع {teams[0].name}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+                  team1TopicIds.length === 3 ? 'bg-black text-white' : 'bg-amber-600/30 text-amber-900 font-bold'
+                }`}>
+                  {team1TopicIds.length} / 3
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActivePickerTeam(1)}
+                className={`py-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  activePickerTeam === 1
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'text-purple-300 hover:text-white'
+                }`}
+              >
+                <span>مواضيع {teams[1].name}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+                  team2TopicIds.length === 3 ? 'bg-white text-purple-900' : 'bg-purple-900/60 text-purple-200 font-bold'
+                }`}>
+                  {team2TopicIds.length} / 3
+                </span>
+              </button>
             </div>
 
             {/* Search & Category Filter */}
@@ -695,13 +768,22 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
               </div>
             </div>
 
-            {/* Selected Count Bar */}
+            {/* Selected Count Status */}
             <div className="p-3 mb-3 rounded-2xl bg-purple-950/60 border border-purple-800/40 flex items-center justify-between text-xs font-black">
-              <span>المواضيع المختارة: ({selectedTopicIds.length} / 6)</span>
-              {selectedTopicIds.length === 6 ? (
-                <span className="text-emerald-400">✓ جاهز للعب اللوحة كاملة</span>
+              <div className="flex items-center gap-3">
+                <span className="text-amber-400">
+                  {teams[0].name}: ({team1TopicIds.length} / 3)
+                </span>
+                <span className="text-purple-400">
+                  {teams[1].name}: ({team2TopicIds.length} / 3)
+                </span>
+              </div>
+              {team1TopicIds.length === 3 && team2TopicIds.length === 3 ? (
+                <span className="text-emerald-400">✓ اكتملت 6 مواضيع بنجاح</span>
               ) : (
-                <span className="text-amber-400">يرجى اختيار 6 مواضيع لبدء اللعبة</span>
+                <span className="text-amber-400">
+                  اختر 3 مواضيع لـ {activePickerTeam === 0 ? teams[0].name : teams[1].name}
+                </span>
               )}
             </div>
 
@@ -711,23 +793,28 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                 .filter(t => topicCategoryFilter === 'all' || t.category === topicCategoryFilter)
                 .filter(t => !topicSearch || t.title.includes(topicSearch) || t.description.includes(topicSearch))
                 .map((t) => {
-                  const isSelected = selectedTopicIds.includes(t.id);
-                  const selectedIdx = selectedTopicIds.indexOf(t.id) + 1;
+                  const isTeam1 = team1TopicIds.includes(t.id);
+                  const isTeam2 = team2TopicIds.includes(t.id);
+                  const isSelected = isTeam1 || isTeam2;
 
                   return (
                     <div
                       key={t.id}
                       onClick={() => handleToggleTopic(t.id)}
                       className={`p-3 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between text-right relative overflow-hidden ${
-                        isSelected
+                        isTeam1
                           ? 'border-amber-400 bg-amber-500/20 shadow-lg scale-[1.02]'
-                          : 'border-purple-800/40 bg-black/40 hover:border-purple-600/60'
+                          : isTeam2
+                            ? 'border-purple-400 bg-purple-600/25 shadow-lg scale-[1.02]'
+                            : 'border-purple-800/40 bg-black/40 hover:border-purple-600/60'
                       }`}
                     >
                       {/* Selection Badge */}
                       {isSelected && (
-                        <div className="absolute top-2 left-2 w-6 h-6 rounded-full bg-amber-500 text-black font-black text-xs flex items-center justify-center shadow-md">
-                          {selectedIdx}
+                        <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-full font-black text-[10px] shadow-md ${
+                          isTeam1 ? 'bg-amber-400 text-black' : 'bg-purple-600 text-white'
+                        }`}>
+                          {isTeam1 ? teams[0].name.slice(0, 10) : teams[1].name.slice(0, 10)}
                         </div>
                       )}
 
@@ -748,20 +835,23 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
             {/* Bottom Actions */}
             <div className="pt-4 border-t border-purple-900/40 mt-4 flex items-center justify-between">
               <button
-                onClick={() => setSelectedTopicIds(['t-animals', 't-science', 't-snacks', 't-general', 't-worldcup', 't-choices'])}
+                onClick={() => {
+                  setTeam1TopicIds(['t-animals', 't-science', 't-snacks']);
+                  setTeam2TopicIds(['t-general', 't-worldcup', 't-choices']);
+                }}
                 className="text-xs text-purple-400 hover:text-white underline cursor-pointer"
               >
-                استعادة المواضيع الستة الكلاسيكية
+                المواضيع الكلاسيكية الافتراضية
               </button>
 
               <button
-                disabled={selectedTopicIds.length !== 6}
+                disabled={team1TopicIds.length !== 3 || team2TopicIds.length !== 3}
                 onClick={() => {
                   sound.playClick();
                   setShowTopicPicker(false);
                 }}
                 className={`px-6 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all cursor-pointer ${
-                  selectedTopicIds.length === 6
+                  team1TopicIds.length === 3 && team2TopicIds.length === 3
                     ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-black hover:from-amber-400 hover:to-orange-500'
                     : 'bg-gray-800 text-gray-500 cursor-not-allowed'
                 }`}

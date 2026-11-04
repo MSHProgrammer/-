@@ -3,7 +3,8 @@ import { Topic, Question, Section, Difficulty, QuestionPoints } from '../types/j
 import { GameInfo, GameCategory, DifficultyLevel } from '../types/game';
 import { JAMR_GAMES_CATALOG } from '../data/gamesCatalog';
 import { COMIC_PRESETS } from '../data/comicAssets';
-import { Shield, Plus, Trash2, Edit2, Download, Upload, Eye, Check, X, Flame, Search, ArrowRight, Layers, FileQuestion, Users, RefreshCw, FolderOpen, Image, Palette, Camera, UploadCloud, CheckCircle2, AlertCircle, Loader2, Video, Film, PlayCircle, Gamepad2, Globe, Laptop } from 'lucide-react';
+import { DEFAULT_BARRAH_CATEGORIES, BarrahCategory } from '../data/barrahSalfaCategories';
+import { Shield, Plus, Trash2, Edit2, Download, Upload, Eye, Check, X, Flame, Search, ArrowRight, Layers, FileQuestion, Users, RefreshCw, FolderOpen, Image, Palette, Camera, UploadCloud, CheckCircle2, AlertCircle, Loader2, Video, Film, PlayCircle, Gamepad2, Globe, Laptop, Sparkles, Bot, Wand2, AlertTriangle, Bug, MessageSquare } from 'lucide-react';
 import { sound } from '../services/soundFx';
 import { isVideoContent, getYouTubeEmbedUrl, detectMediaType } from '../utils/media';
 
@@ -92,7 +93,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authError, setAuthError] = useState('');
-  const [activeTab, setActiveTab] = useState<'games' | 'sections' | 'topics' | 'questions' | 'export_import' | 'rooms'>('games');
+  const [activeTab, setActiveTab] = useState<'games' | 'sections' | 'topics' | 'questions' | 'barrah_categories' | 'reports' | 'export_import' | 'rooms'>('games');
 
   // Games State
   const [gamesList, setGamesList] = useState<GameInfo[]>(games || JAMR_GAMES_CATALOG);
@@ -113,6 +114,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [gameTags, setGameTags] = useState('');
   const [gameMsg, setGameMsg] = useState('');
   const [gameSearch, setGameSearch] = useState('');
+
+  // AI Game Assistant State
+  const [showAiAssistant, setShowAiAssistant] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiMode, setAiMode] = useState<'create' | 'modify'>('create');
+  const [aiTargetGameId, setAiTargetGameId] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiGeneratedGame, setAiGeneratedGame] = useState<GameInfo | null>(null);
+  const [aiMsg, setAiMsg] = useState('');
 
   // Sections State
   const [sections, setSections] = useState<Section[]>([]);
@@ -166,6 +176,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Rooms Monitor
   const [roomsList, setRoomsList] = useState<any[]>([]);
 
+  // Barrah Salfa Categories State (20+ Categories & Sawaalif)
+  const [barrahCategories, setBarrahCategories] = useState<BarrahCategory[]>(DEFAULT_BARRAH_CATEGORIES);
+  const [editingBarrahCat, setEditingBarrahCat] = useState<BarrahCategory | null>(null);
+  const [barrahCatName, setBarrahCatName] = useState('');
+  const [barrahCatIcon, setBarrahCatIcon] = useState('🍲');
+  const [barrahCatDesc, setBarrahCatDesc] = useState('');
+  const [barrahCatWordsInput, setBarrahCatWordsInput] = useState('');
+  const [barrahMsg, setBarrahMsg] = useState('');
+  const [selectedBarrahCatId, setSelectedBarrahCatId] = useState<string>('c-food');
+  const [newWordText, setNewWordText] = useState('');
+
+  // Bug Reports State
+  const [reportsList, setReportsList] = useState<any[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [reportFilter, setReportFilter] = useState<'all' | 'new' | 'investigating' | 'resolved'>('all');
+  const [reportMsg, setReportMsg] = useState('');
+
   // Load sections from API
   const loadSections = async () => {
     try {
@@ -198,14 +225,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const loadBarrahCategories = async () => {
+    try {
+      const res = await fetch('/api/barrah/categories');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.categories) && data.categories.length > 0) {
+          setBarrahCategories(data.categories);
+          if (!selectedBarrahCatId && data.categories[0]) {
+            setSelectedBarrahCatId(data.categories[0].id);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadReports = async (token = authToken) => {
+    if (!token) return;
+    setReportsLoading(true);
+    try {
+      const res = await fetch('/api/admin/reports', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.reports)) {
+          setReportsList(data.reports);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setReportsLoading(false);
+    }
+  };
+
   // Check existing token
   useEffect(() => {
     loadGames();
     loadSections();
+    loadBarrahCategories();
     const saved = sessionStorage.getItem('jamr_admin_token');
     if (saved) {
       setAuthToken(saved);
       setIsAuthenticated(true);
+      loadReports(saved);
     }
   }, []);
 
@@ -225,12 +291,172 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setAuthToken(data.token);
         sessionStorage.setItem('jamr_admin_token', data.token);
         loadGames();
+        loadBarrahCategories();
+        loadReports(data.token);
       } else {
         sound.playWrong();
         setAuthError(data.error || 'رمز الدخول غير صحيح');
       }
     } catch {
       setAuthError('حدث خطأ في الاتصال بالخادم');
+    }
+  };
+
+  const handleUpdateReportStatus = async (id: string, status: string) => {
+    sound.playClick();
+    try {
+      const res = await fetch(`/api/admin/reports/${id}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ status })
+      });
+      if (res.ok) {
+        loadReports();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteReport = async (id: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذا البلاغ؟')) return;
+    sound.playClick();
+    try {
+      const res = await fetch(`/api/admin/reports/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        loadReports();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveBarrahCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!barrahCatName.trim()) {
+      setBarrahMsg('يرجى كتابة اسم القسم');
+      return;
+    }
+    sound.playClick();
+    try {
+      const words = barrahCatWordsInput
+        .split('\n')
+        .map(w => w.trim())
+        .filter(Boolean);
+
+      const url = editingBarrahCat ? `/api/admin/barrah/categories/${editingBarrahCat.id}` : '/api/admin/barrah/categories';
+      const method = editingBarrahCat ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          name: barrahCatName,
+          icon: barrahCatIcon || '📦',
+          description: barrahCatDesc,
+          words: words.length > 0 ? words : (editingBarrahCat?.words || ['سالفة 1', 'سالفة 2'])
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        sound.playCorrect();
+        setBarrahMsg('تم حفظ القسم بنجاح');
+        setEditingBarrahCat(null);
+        setBarrahCatName('');
+        setBarrahCatDesc('');
+        setBarrahCatWordsInput('');
+        loadBarrahCategories();
+      } else {
+        setBarrahMsg(data.error || 'حدث خطأ في حفظ القسم');
+      }
+    } catch {
+      setBarrahMsg('تعذر الاتصال بالخادم');
+    }
+  };
+
+  const handleDeleteBarrahCategory = async (id: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذا القسم وكل السوالف داخله؟')) return;
+    sound.playClick();
+    try {
+      const res = await fetch(`/api/admin/barrah/categories/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        loadBarrahCategories();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddWordToCategory = async (catId: string) => {
+    const trimmed = newWordText.trim();
+    if (!trimmed) return;
+    const cat = barrahCategories.find(c => c.id === catId);
+    if (!cat) return;
+    if (cat.words.includes(trimmed)) {
+      alert('هذه السالفة موجودة مسبقاً في هذا القسم');
+      return;
+    }
+    const updatedWords = [...cat.words, trimmed];
+    sound.playClick();
+    try {
+      const res = await fetch(`/api/admin/barrah/categories/${catId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          name: cat.name,
+          icon: cat.icon,
+          description: cat.description,
+          words: updatedWords
+        })
+      });
+      if (res.ok) {
+        setNewWordText('');
+        loadBarrahCategories();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteWordFromCategory = async (catId: string, wordToDelete: string) => {
+    const cat = barrahCategories.find(c => c.id === catId);
+    if (!cat) return;
+    const updatedWords = cat.words.filter(w => w !== wordToDelete);
+    sound.playClick();
+    try {
+      const res = await fetch(`/api/admin/barrah/categories/${catId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          name: cat.name,
+          icon: cat.icon,
+          description: cat.description,
+          words: updatedWords
+        })
+      });
+      if (res.ok) {
+        loadBarrahCategories();
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -335,6 +561,100 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setGameSupportsOnline(false);
     setGameTags('');
     setGameMsg('');
+  };
+
+  // AI Game Assistant Handlers
+  const handleGenerateGameWithAI = async () => {
+    if (!aiPrompt.trim()) {
+      setAiMsg('يرجى كتابة وصف للعبة أو التعديل المطلوب');
+      return;
+    }
+    setAiLoading(true);
+    setAiMsg('');
+    sound.playClick();
+    try {
+      const res = await fetch('/api/admin/ai/games', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          mode: aiMode,
+          prompt: aiPrompt.trim(),
+          targetGameId: aiMode === 'modify' ? aiTargetGameId : undefined,
+          authToken
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.game) {
+        sound.playVictory();
+        setAiGeneratedGame(data.game);
+        setAiMsg('✨ نجح الذكاء الاصطناعي في إعداد وتصميم اللعبة! يمكنك مراجعتها وحفظها الآن');
+      } else {
+        setAiMsg(data.error || 'حدث خطأ أثناء معالجة الذكاء الاصطناعي');
+      }
+    } catch {
+      setAiMsg('تعذر الاتصال بالخادم');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleApplyAiGameToForm = (game: GameInfo) => {
+    sound.playClick();
+    if (aiMode === 'modify') {
+      const existing = gamesList.find(g => g.id === game.id);
+      if (existing) setEditingGame(existing);
+    } else {
+      setEditingGame(null);
+    }
+    setGameTitle(game.title);
+    setGameSubtitle(game.subtitle || '');
+    setGameCategory(game.category);
+    setGameCategoryLabel(game.categoryLabel);
+    setGameDescription(game.description);
+    setGameRules(Array.isArray(game.rules) ? game.rules.join('\n') : '');
+    setGameMinPlayers(game.minPlayers);
+    setGameMaxPlayers(game.maxPlayers);
+    setGameDuration(game.durationMinutes);
+    setGameDifficulty(game.difficulty);
+    setGameIcon(game.icon || '🎮');
+    setGameSupportsOffline(game.supportsOffline ?? true);
+    setGameSupportsOnline(game.supportsOnline ?? false);
+    setGameTags(Array.isArray(game.tags) ? game.tags.join(', ') : '');
+    setShowAiAssistant(false);
+    document.getElementById('game-admin-form')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleDirectSaveAiGame = async (game: GameInfo) => {
+    sound.playClick();
+    try {
+      const isExisting = gamesList.some(g => g.id === game.id);
+      const url = isExisting ? `/api/admin/games/${game.id}` : '/api/admin/games';
+      const method = isExisting ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify(game)
+      });
+      const data = await res.json();
+      if (res.ok && (data.success || data.game)) {
+        sound.playVictory();
+        setGameMsg('تم حفظ اللعبة المولدة بالذكاء الاصطناعي بنجاح في قاعدة البيانات!');
+        setAiGeneratedGame(null);
+        setShowAiAssistant(false);
+        loadGames();
+        onRefreshData();
+      } else {
+        setAiMsg(data.error || 'فشل حفظ اللعبة');
+      }
+    } catch {
+      setAiMsg('تعذر الاتصال بالخادم');
+    }
   };
 
   const handleDeleteGame = async (id: string) => {
@@ -823,6 +1143,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </button>
 
               <button
+                onClick={() => { sound.playClick(); setActiveTab('barrah_categories'); }}
+                className={`py-3 px-4 text-xs font-black border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'barrah_categories'
+                    ? 'border-orange-600 text-orange-600 bg-white'
+                    : 'border-transparent text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span className="text-sm">🕵️</span>
+                <span>أقسام برا السالفة ({barrahCategories.length})</span>
+              </button>
+
+              <button
+                onClick={() => { sound.playClick(); setActiveTab('reports'); loadReports(); }}
+                className={`py-3 px-4 text-xs font-black border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'reports'
+                    ? 'border-red-600 text-red-600 bg-white'
+                    : 'border-transparent text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <AlertTriangle className="w-4 h-4 text-red-500" />
+                <span>البلاغات والشكاوى ⚠️</span>
+                {reportsList.filter(r => r.status !== 'resolved').length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-bold">
+                    {reportsList.filter(r => r.status !== 'resolved').length}
+                  </span>
+                )}
+              </button>
+
+              <button
                 onClick={() => { sound.playClick(); setActiveTab('export_import'); }}
                 className={`py-3 px-4 text-xs font-black border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
                   activeTab === 'export_import'
@@ -864,6 +1213,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => setShowAiAssistant(!showAiAssistant)}
+                      className="px-3.5 py-1.5 text-xs font-black text-purple-950 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 hover:from-amber-200 hover:to-yellow-300 rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-4 h-4 fill-purple-950" />
+                      <span>{showAiAssistant ? 'إخفاء الذكاء الاصطناعي' : '✨ الذكاء الاصطناعي للألعاب'}</span>
+                    </button>
+                    <button
                       onClick={handleResetGames}
                       className="px-3 py-1.5 text-xs font-bold text-slate-300 bg-black/40 hover:bg-black/60 border border-purple-800/60 rounded-xl transition-colors cursor-pointer"
                     >
@@ -877,10 +1233,196 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       className="px-3 py-1.5 text-xs font-black text-black bg-amber-400 hover:bg-amber-300 rounded-xl shadow-md transition-colors cursor-pointer flex items-center gap-1"
                     >
                       <Plus className="w-4 h-4" />
-                      <span>إضافة لعبة جديدة</span>
+                      <span>إضافة يدوية</span>
                     </button>
                   </div>
                 </div>
+
+                {/* ================= GEMINI AI GAME MAKER ASSISTANT ================= */}
+                {showAiAssistant && (
+                  <div className="p-5 rounded-3xl bg-gradient-to-b from-[#2a0e4a] via-[#1b0833] to-[#120524] border-2 border-amber-400 shadow-2xl space-y-4 animate-in slide-in-from-top-4">
+                    <div className="flex items-center justify-between border-b border-purple-800/60 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center">
+                          <Bot className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-black text-white flex items-center gap-1.5">
+                            <span>مساعد الذكاء الاصطناعي لإدارة وتصميم الألعاب</span>
+                            <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">Gemini Pro</span>
+                          </h4>
+                          <p className="text-[11px] text-purple-300">
+                            اكتب وصف اللعبة التي ترغب بإضافتها أو حدد لعبة حالية واطلب من الذكاء الاصطناعي تعديلها
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowAiAssistant(false)}
+                        className="text-purple-400 hover:text-white text-xs cursor-pointer p-1"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Mode Selection */}
+                    <div className="grid grid-cols-2 gap-3 p-1 rounded-2xl bg-black/40 border border-purple-800/40">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiMode('create');
+                          setAiGeneratedGame(null);
+                          setAiMsg('');
+                        }}
+                        className={`py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                          aiMode === 'create'
+                            ? 'bg-amber-400 text-black shadow-md'
+                            : 'text-purple-300 hover:text-white'
+                        }`}
+                      >
+                        <Wand2 className="w-3.5 h-3.5" />
+                        <span>إنشاء لعبة جديدة بالكامل بالوصف</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiMode('modify');
+                          setAiGeneratedGame(null);
+                          setAiMsg('');
+                          if (!aiTargetGameId && gamesList[0]) setAiTargetGameId(gamesList[0].id);
+                        }}
+                        className={`py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                          aiMode === 'modify'
+                            ? 'bg-amber-400 text-black shadow-md'
+                            : 'text-purple-300 hover:text-white'
+                        }`}
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                        <span>تعديل وتطوير لعبة حالية</span>
+                      </button>
+                    </div>
+
+                    {/* If Modify Mode: Pick Target Game */}
+                    {aiMode === 'modify' && (
+                      <div>
+                        <label className="block text-xs font-bold text-amber-300 mb-1">اختر اللعبة المراد تعديلها:</label>
+                        <select
+                          value={aiTargetGameId}
+                          onChange={(e) => setAiTargetGameId(e.target.value)}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl p-2.5 text-xs font-bold text-white focus:outline-hidden focus:border-amber-400"
+                        >
+                          {gamesList.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.icon || '🎮'} {g.title} ({g.categoryLabel})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Description Textarea */}
+                    <div>
+                      <label className="block text-xs font-bold text-purple-200 mb-1.5">
+                        {aiMode === 'create' 
+                          ? 'صف فكرة اللعبة وقواعدها ونوعها (مثلاً: لعبة تحدي الأمثال، أو لعبة كشف الجاسوس...):'
+                          : 'ما هي التعديلات التي تريد إجراؤها على هذه اللعبة؟ (تغيير الاسم، القواعد، عدد اللاعبين...):'}
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder={
+                          aiMode === 'create'
+                            ? 'مثال: اصنع لعبة ديوانية جديدة اسمها سكة سفر، يشارك فيها 3 إلى 10 لاعبين، تقوم على تمثيل وتخمين محطات السفر والمواقف المضحكة في المطار...'
+                            : 'مثال: قم بتطوير لعبة مافيا لتصبح تدعم 20 لاعباً وتكون أسرع وأكثر إثارة واكتب 5 قواعد حماسية...'
+                        }
+                        className="w-full bg-black/60 border border-purple-700/60 rounded-2xl p-3 text-xs text-white focus:outline-hidden focus:border-amber-400 placeholder:text-purple-400/40"
+                      />
+                    </div>
+
+                    {/* AI Feedback Banner */}
+                    {aiMsg && (
+                      <div className="p-3 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold text-center">
+                        {aiMsg}
+                      </div>
+                    )}
+
+                    {/* Generate Button */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        disabled={aiLoading || !aiPrompt.trim()}
+                        onClick={handleGenerateGameWithAI}
+                        className={`flex-1 py-3 rounded-2xl font-black text-xs shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                          aiLoading || !aiPrompt.trim()
+                            ? 'bg-purple-950/60 text-purple-400 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 text-black hover:scale-[1.01]'
+                        }`}
+                      >
+                        {aiLoading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>الذكاء الاصطناعي يقوم بتصميم وصياغة اللعبة الآن...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4" />
+                            <span>{aiMode === 'create' ? 'توليد وتصميم اللعبة بالذكاء الاصطناعي 🔥' : 'تطبيق التعديلات بالذكاء الاصطناعي 🔥'}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Generated Game Preview Card */}
+                    {aiGeneratedGame && (
+                      <div className="p-4 rounded-2xl bg-black/60 border-2 border-emerald-500/60 space-y-3">
+                        <div className="flex items-center justify-between border-b border-emerald-950 pb-2">
+                          <span className="text-xs font-black text-emerald-400">معاينة نتيجة الذكاء الاصطناعي</span>
+                          <span className="text-2xl">{aiGeneratedGame.icon || '🎮'}</span>
+                        </div>
+
+                        <div>
+                          <h5 className="text-base font-black text-white">{aiGeneratedGame.title}</h5>
+                          <span className="text-xs text-amber-300 font-bold">{aiGeneratedGame.subtitle}</span>
+                          <p className="text-xs text-purple-200 mt-1">{aiGeneratedGame.description}</p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 text-[11px]">
+                          <span className="px-2.5 py-1 rounded-lg bg-purple-900/60 text-purple-200 border border-purple-700/50">
+                            👥 {aiGeneratedGame.minPlayers} - {aiGeneratedGame.maxPlayers} لاعب
+                          </span>
+                          <span className="px-2.5 py-1 rounded-lg bg-purple-900/60 text-purple-200 border border-purple-700/50">
+                            ⏱️ {aiGeneratedGame.durationMinutes}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-950/60 text-emerald-300 border border-emerald-700/50">
+                            {aiGeneratedGame.supportsOffline ? '✓ أوفلاين' : '✗ غير مدعوم أوفلاين'}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-lg bg-blue-950/60 text-blue-300 border border-blue-700/50">
+                            {aiGeneratedGame.supportsOnline ? '✓ أونلاين' : '✗ غير مدعوم أونلاين'}
+                          </span>
+                        </div>
+
+                        {/* Actions for generated game */}
+                        <div className="flex items-center gap-2 pt-2 border-t border-purple-900/60">
+                          <button
+                            type="button"
+                            onClick={() => handleDirectSaveAiGame(aiGeneratedGame)}
+                            className="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs shadow-lg transition-all cursor-pointer"
+                          >
+                            اعتماد وحفظ اللعبة فوراً في قاعدة البيانات 🔥
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleApplyAiGameToForm(aiGeneratedGame)}
+                            className="px-4 py-2.5 rounded-xl bg-purple-900/60 hover:bg-purple-800 text-purple-200 font-bold text-xs cursor-pointer"
+                          >
+                            تعديل في النموذج اليدوي
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Game Form (Add or Edit) */}
                 <div id="game-admin-form" className="bg-[#140a24] rounded-2xl p-5 border-2 border-amber-500/40 text-slate-100 shadow-xl">
@@ -2150,6 +2692,397 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab: Barrah Salfa Categories Management (أقسام برا السالفة والسوالف) */}
+            {activeTab === 'barrah_categories' && (
+              <div className="p-6 space-y-6">
+                
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-orange-500/10 border border-orange-500/30 p-4 rounded-2xl">
+                  <div>
+                    <h3 className="text-sm font-black text-amber-300 flex items-center gap-2">
+                      <span className="text-xl">🕵️</span>
+                      <span>إدارة أقسام وسوالف لعبة برا السالفة ({barrahCategories.length} قسماً)</span>
+                    </h3>
+                    <p className="text-xs text-purple-200/80 mt-1">
+                      يمكنك هنا إضافة أقسام جديدة، وتعديل الأقسام العشرين الحالية، وإضافة أو حذف الكلمات (السوالف) داخل كل قسم.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setEditingBarrahCat(null);
+                      setBarrahCatName('');
+                      setBarrahCatIcon('📦');
+                      setBarrahCatDesc('');
+                      setBarrahCatWordsInput('');
+                      setBarrahMsg('');
+                    }}
+                    className="px-4 py-2 bg-gradient-to-r from-amber-400 to-orange-500 text-black font-black text-xs rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة قسم جديد</span>
+                  </button>
+                </div>
+
+                {/* Category Form */}
+                <div className="bg-black/40 border border-purple-800/60 p-5 rounded-2xl space-y-4">
+                  <h4 className="text-xs font-black text-amber-400">
+                    {editingBarrahCat ? `تعديل قسم: ${editingBarrahCat.name}` : 'إضافة قسم جديد لبرا السالفة:'}
+                  </h4>
+
+                  <form onSubmit={handleSaveBarrahCategory} className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                      <div className="sm:col-span-1">
+                        <label className="block text-[11px] font-bold text-purple-300 mb-1">الأيقونة (Emoji):</label>
+                        <input
+                          type="text"
+                          value={barrahCatIcon}
+                          onChange={e => setBarrahCatIcon(e.target.value)}
+                          placeholder="🍲"
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl p-2.5 text-center text-lg text-white focus:outline-hidden focus:border-amber-400"
+                        />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <label className="block text-[11px] font-bold text-purple-300 mb-1">اسم القسم:</label>
+                        <input
+                          type="text"
+                          value={barrahCatName}
+                          onChange={e => setBarrahCatName(e.target.value)}
+                          placeholder="مثال: ألعاب شعبية، رحلات وكشتات، مقاهي مشهورة..."
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl p-2.5 text-xs text-white focus:outline-hidden focus:border-amber-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-purple-300 mb-1">وصف مختصر للقسم:</label>
+                      <input
+                        type="text"
+                        value={barrahCatDesc}
+                        onChange={e => setBarrahCatDesc(e.target.value)}
+                        placeholder="وصف يساعد اللاعبين على معرفة نوع الكلمات في هذا القسم"
+                        className="w-full bg-black/60 border border-purple-700/60 rounded-xl p-2.5 text-xs text-white focus:outline-hidden focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-purple-300 mb-1">
+                        السوالف (الكلمات السرية) داخل هذا القسم (كل سالفة في سطر):
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={barrahCatWordsInput}
+                        onChange={e => setBarrahCatWordsInput(e.target.value)}
+                        placeholder="كبسة حاشي&#10;شاورما دجاج&#10;مظبي لحم..."
+                        className="w-full bg-black/60 border border-purple-700/60 rounded-2xl p-3 text-xs text-white focus:outline-hidden focus:border-amber-400 placeholder:text-purple-400/40"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="submit"
+                        className="px-5 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-black text-xs rounded-xl shadow-md cursor-pointer"
+                      >
+                        {editingBarrahCat ? 'حفظ تعديلات القسم' : 'إضافة القسم الآن'}
+                      </button>
+                      {editingBarrahCat && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingBarrahCat(null);
+                            setBarrahCatName('');
+                            setBarrahCatIcon('📦');
+                            setBarrahCatDesc('');
+                            setBarrahCatWordsInput('');
+                          }}
+                          className="px-4 py-2.5 bg-purple-900/60 hover:bg-purple-800 text-purple-200 font-bold text-xs rounded-xl cursor-pointer"
+                        >
+                          إلغاء التعديل
+                        </button>
+                      )}
+                      {barrahMsg && <span className="text-xs font-bold text-emerald-400 mr-2">{barrahMsg}</span>}
+                    </div>
+                  </form>
+                </div>
+
+                {/* Categories Grid & Word Editor */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Column 1 & 2: Categories List */}
+                  <div className="lg:col-span-2 space-y-3">
+                    <h4 className="text-xs font-black text-white">الأقسام الحالية (اضغط على قسم لعرض وإضافة السوالف):</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-96 overflow-y-auto p-1">
+                      {barrahCategories.map(cat => {
+                        const isSelected = selectedBarrahCatId === cat.id;
+                        return (
+                          <div
+                            key={cat.id}
+                            onClick={() => {
+                              sound.playClick();
+                              setSelectedBarrahCatId(cat.id);
+                            }}
+                            className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                              isSelected
+                                ? 'bg-orange-500/20 border-orange-400 shadow-md ring-1 ring-orange-500/40'
+                                : 'bg-black/40 border-purple-800/40 hover:border-purple-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 truncate">
+                              <span className="text-2xl">{cat.icon}</span>
+                              <div className="truncate">
+                                <div className="text-xs font-black text-white truncate">{cat.name}</div>
+                                <div className="text-[10px] text-purple-300 font-mono">{cat.words.length} سالفة</div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  sound.playClick();
+                                  setEditingBarrahCat(cat);
+                                  setBarrahCatName(cat.name);
+                                  setBarrahCatIcon(cat.icon);
+                                  setBarrahCatDesc(cat.description || '');
+                                  setBarrahCatWordsInput(cat.words.join('\n'));
+                                }}
+                                className="p-1.5 text-purple-300 hover:text-white rounded-lg bg-purple-950/60 cursor-pointer"
+                                title="تعديل القسم"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteBarrahCategory(cat.id)}
+                                className="p-1.5 text-red-400 hover:text-red-300 rounded-lg bg-red-950/60 cursor-pointer"
+                                title="حذف القسم"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Column 3: Sawaalif (Words) of Selected Category */}
+                  <div className="bg-black/50 border border-purple-800/50 p-4 rounded-2xl space-y-3">
+                    {(() => {
+                      const cur = barrahCategories.find(c => c.id === selectedBarrahCatId) || barrahCategories[0];
+                      if (!cur) return <div className="text-xs text-purple-400">اختر قسماً لعرض سوالفه</div>;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between border-b border-purple-900/40 pb-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xl">{cur.icon}</span>
+                              <span className="text-xs font-black text-amber-300 truncate">{cur.name}</span>
+                            </div>
+                            <span className="text-[11px] font-mono text-purple-300 bg-purple-900/40 px-2 py-0.5 rounded-full">
+                              {cur.words.length} سالفة
+                            </span>
+                          </div>
+
+                          {/* Add single word */}
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={newWordText}
+                              onChange={e => setNewWordText(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && handleAddWordToCategory(cur.id)}
+                              placeholder="أضف سالفة جديدة هنا..."
+                              className="flex-1 bg-black/60 border border-purple-700/60 rounded-xl px-3 py-2 text-xs text-white placeholder:text-purple-400/40 focus:outline-hidden focus:border-amber-400"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleAddWordToCategory(cur.id)}
+                              disabled={!newWordText.trim()}
+                              className="px-3 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-black font-black text-xs rounded-xl cursor-pointer"
+                            >
+                              إضافة
+                            </button>
+                          </div>
+
+                          {/* Words Chips */}
+                          <div className="flex flex-wrap gap-1.5 max-h-72 overflow-y-auto p-1">
+                            {cur.words.map((w, idx) => (
+                              <span
+                                key={idx}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-950/80 border border-purple-700/50 text-xs font-bold text-white shadow-xs"
+                              >
+                                <span>{w}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteWordFromCategory(cur.id, w)}
+                                  className="text-red-400 hover:text-red-300 cursor-pointer p-0.5"
+                                  title="حذف هذه السالفة"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tab: Bug Reports (البلاغات والشكاوى) */}
+            {activeTab === 'reports' && (
+              <div className="p-6 space-y-6">
+                
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-red-950/30 border border-red-500/30 p-4 rounded-2xl">
+                  <div>
+                    <h3 className="text-sm font-black text-red-300 flex items-center gap-2">
+                      <AlertTriangle className="w-5 h-5 text-red-400" />
+                      <span>صندوق بلاغات وشكاوى اللاعبين (إبلاغ عن خلل)</span>
+                    </h3>
+                    <p className="text-xs text-purple-200/80 mt-1">
+                      تصلك هنا فوراً جميع بلاغات الخلل والملاحظات المرسلة من اللاعبين في أسفل الموقع.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => loadReports()}
+                      className="px-3.5 py-1.5 text-xs font-bold text-white bg-purple-900/60 hover:bg-purple-800 rounded-xl cursor-pointer flex items-center gap-1.5 border border-purple-700/50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${reportsLoading ? 'animate-spin' : ''}`} />
+                      <span>تحديث البلاغات</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Status Filter Tabs */}
+                <div className="flex gap-2">
+                  {[
+                    { id: 'all', label: `الكل (${reportsList.length})` },
+                    { id: 'new', label: `جديد (${reportsList.filter(r => r.status === 'new').length})` },
+                    { id: 'investigating', label: `قيد المتابعة (${reportsList.filter(r => r.status === 'investigating').length})` },
+                    { id: 'resolved', label: `تم الحل (${reportsList.filter(r => r.status === 'resolved').length})` }
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setReportFilter(f.id as any)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer transition-colors ${
+                        reportFilter === f.id
+                          ? 'bg-red-600 text-white shadow-md'
+                          : 'bg-black/40 text-purple-300 hover:text-white border border-purple-800/40'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Reports List */}
+                {reportsList.length === 0 ? (
+                  <div className="text-center py-12 text-purple-400 font-bold text-xs bg-black/30 rounded-2xl border border-dashed border-purple-900/40">
+                    لا توجد بلاغات مرسلة حالياً. عندما يبلغ أحد اللاعبين ستظهر رسالته هنا مباشرة.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {reportsList
+                      .filter(r => (reportFilter === 'all' ? true : r.status === reportFilter))
+                      .map(report => (
+                        <div
+                          key={report.id}
+                          className={`p-4 rounded-2xl border transition-all space-y-3 ${
+                            report.status === 'resolved'
+                              ? 'bg-black/30 border-purple-900/40 opacity-75'
+                              : report.status === 'investigating'
+                              ? 'bg-amber-950/20 border-amber-600/40'
+                              : 'bg-red-950/20 border-red-500/50 shadow-md'
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-900/30 pb-2">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${
+                                  report.status === 'resolved'
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : report.status === 'investigating'
+                                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                    : 'bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse'
+                                }`}
+                              >
+                                {report.status === 'resolved'
+                                  ? 'تم الحل ✓'
+                                  : report.status === 'investigating'
+                                  ? 'قيد المتابعة ⏳'
+                                  : 'بلاغ جديد ⚠️'}
+                              </span>
+
+                              <span className="text-xs font-black text-white">
+                                {report.category || 'خلل فني'}
+                              </span>
+
+                              {report.gameName && (
+                                <span className="text-[10px] bg-purple-900/50 text-purple-200 px-2 py-0.5 rounded-full border border-purple-700/50">
+                                  🎮 {report.gameName}
+                                </span>
+                              )}
+                            </div>
+
+                            <span className="text-[10px] font-mono text-purple-400">
+                              {new Date(report.createdAt).toLocaleString('ar-SA')}
+                            </span>
+                          </div>
+
+                          {/* Description */}
+                          <p className="text-xs text-purple-100 leading-relaxed bg-black/40 p-3 rounded-xl border border-purple-900/30">
+                            {report.description}
+                          </p>
+
+                          {/* Reporter Details & Actions */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 text-xs">
+                            <div className="text-[11px] text-purple-300">
+                              <span>المُبلّغ: </span>
+                              <span className="font-black text-white">{report.reporterName || 'مجهول'}</span>
+                              {report.contact && (
+                                <span className="mr-3 font-mono text-amber-300">({report.contact})</span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {report.status !== 'resolved' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateReportStatus(report.id, 'resolved')}
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg cursor-pointer"
+                                >
+                                  وضع كـ تم الحل ✓
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateReportStatus(report.id, 'investigating')}
+                                  className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] rounded-lg cursor-pointer"
+                                >
+                                  إعادة فتح البلاغ ⏳
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteReport(report.id)}
+                                className="p-1 text-red-400 hover:text-red-300 cursor-pointer"
+                                title="حذف البلاغ"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                   </div>
                 )}
               </div>

@@ -8,7 +8,20 @@ import dotenv from 'dotenv';
 import { DEFAULT_TOPICS, DEFAULT_QUESTIONS, DEFAULT_SECTIONS } from './src/data/jamrDefaultTopics.ts';
 import { JAMR_GAMES_CATALOG } from './src/data/gamesCatalog.ts';
 import { Topic, Question, Section, JamrMatchState, BoardTile, LifelineType } from './src/types/jamr.ts';
-import { GameInfo } from './src/types/game.ts';
+import { GameInfo, GameCategory } from './src/types/game.ts';
+import { GoogleGenAI } from '@google/genai';
+import { DEFAULT_BARRAH_CATEGORIES, BarrahCategory } from './src/data/barrahSalfaCategories.ts';
+
+export interface BugReport {
+  id: string;
+  type: string;
+  gameTitle?: string;
+  description: string;
+  reporterName: string;
+  reporterContact?: string;
+  createdAt: string;
+  status: 'new' | 'investigating' | 'resolved';
+}
 
 dotenv.config();
 
@@ -76,6 +89,8 @@ let sections: Section[] = [...DEFAULT_SECTIONS];
 let topics: Topic[] = [...DEFAULT_TOPICS];
 let questions: Question[] = [...DEFAULT_QUESTIONS];
 let games: GameInfo[] = [...JAMR_GAMES_CATALOG];
+let barrahCategories: BarrahCategory[] = [...DEFAULT_BARRAH_CATEGORIES];
+let reports: BugReport[] = [];
 
 // Load persisted DB if exists
 try {
@@ -121,6 +136,18 @@ try {
         }
       }
     }
+    if (Array.isArray(parsed.barrahCategories) && parsed.barrahCategories.length > 0) {
+      barrahCategories = parsed.barrahCategories;
+      // Ensure all 20 default categories exist
+      for (const defC of DEFAULT_BARRAH_CATEGORIES) {
+        if (!barrahCategories.some(c => c.id === defC.id)) {
+          barrahCategories.push(defC);
+        }
+      }
+    }
+    if (Array.isArray(parsed.reports)) {
+      reports = parsed.reports;
+    }
   }
 } catch (e) {
   console.error('Failed to load jamr_data_store.json:', e);
@@ -128,7 +155,7 @@ try {
 
 function saveDatabase() {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ sections, topics, questions, games }, null, 2), 'utf-8');
+    fs.writeFileSync(DB_FILE, JSON.stringify({ sections, topics, questions, games, barrahCategories, reports }, null, 2), 'utf-8');
   } catch (err) {
     console.error('Failed to save jamr_data_store.json:', err);
   }
@@ -682,6 +709,135 @@ app.post('/api/admin/games/reset', requireAdmin, (req, res) => {
   res.json({ success: true, games });
 });
 
+// Admin AI Assistant for Generating & Modifying Games
+app.post('/api/admin/ai/games', requireAdmin, async (req, res) => {
+  try {
+    const { prompt, action, baseGameId } = req.body;
+    if (!prompt || typeof prompt !== 'string') {
+      return res.status(400).json({ error: 'يرجى كتابة وصف أو طلب للذكاء الاصطناعي' });
+    }
+
+    const baseGame = baseGameId ? games.find(g => g.id === baseGameId) : null;
+    let generatedGame: Partial<GameInfo> | null = null;
+    let explanation = '';
+
+    // If GEMINI_API_KEY is available, use GoogleGenAI
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const ai = new GoogleGenAI();
+        const systemInstruction = `أنت مصمم ألعاب جماعية عربي محترف ومبتكر لمنصة ألعاب "جَمْر".
+مهمتك: ${action === 'edit' && baseGame ? `تعديل اللعبة الموجودة حالياً (${baseGame.title}) بناءً على طلب المشرف التالي` : 'ابتكار لعبة جماعية عربية جديدة وممتعة جداً للجمعات والديوانيات بناءً على طلب المشرف'}.
+يجب أن ترجع استجابتك بصيغة JSON فقط تطابق الحقول التالية:
+{
+  "title": "اسم اللعبة بالعربي",
+  "subtitle": "شعار أو وصف فرعي جذاب",
+  "category": "trivia" أو "words" أو "deduction" أو "drawing" أو "party",
+  "categoryLabel": "أسئلة وتحدي" أو "كلمات وتخمين" أو "خداع واستنتاج" أو "رسم وتمثيل" أو "جمعات وضحك",
+  "description": "شرح كامل للعبة وكيف تلعب بطريقة واضحة",
+  "rules": ["قاعدة 1", "قاعدة 2", "قاعدة 3", "قاعدة 4"],
+  "minPlayers": 2,
+  "maxPlayers": 16,
+  "durationMinutes": "15 - 25 دقيقة",
+  "difficulty": "سهل" أو "متوسط" أو "حماسي" أو "صعب",
+  "icon": "إيموجي معبر مثل 🎮 أو ⚡ أو 🦁",
+  "supportsOffline": true,
+  "supportsOnline": false,
+  "tags": ["وسم 1", "وسم 2", "وسم 3"],
+  "explanation": "شرح موجز للتعديلات أو الفكرة المبتكرة"
+}`;
+
+        const userContent = `طلب المشرف: "${prompt}".
+${baseGame ? `بيانات اللعبة الأصلية:\n${JSON.stringify(baseGame, null, 2)}` : ''}`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: userContent,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json'
+          }
+        });
+
+        const text = response.text || '';
+        const parsed = JSON.parse(text);
+        if (parsed.title) {
+          generatedGame = parsed;
+          explanation = parsed.explanation || 'تم توليد وتعديل اللعبة بواسطة نموذج الذكاء الاصطناعي بنجاح';
+        }
+      } catch (err) {
+        console.error('Gemini API call failed, falling back to smart synthesizer:', err);
+      }
+    }
+
+    // Smart fallback synthesizer
+    if (!generatedGame) {
+      const cleanPrompt = prompt.trim();
+      const isEdit = action === 'edit' && baseGame;
+      const icons = ['🔥', '⚡', '🏆', '🎭', '🕵️', '🎲', '🧠', '🐝', '📺', '🚀', '🎯', '👑'];
+      const randomIcon = icons[Math.floor(Math.random() * icons.length)];
+
+      let inferredCategory: GameCategory = 'party';
+      let inferredLabel = 'جمعات وضحك';
+      if (cleanPrompt.includes('سؤال') || cleanPrompt.includes('معرفة') || cleanPrompt.includes('ثقافة') || cleanPrompt.includes('مسابقة')) {
+        inferredCategory = 'trivia';
+        inferredLabel = 'أسئلة وتحدي';
+      } else if (cleanPrompt.includes('كلم') || cleanPrompt.includes('حرف') || cleanPrompt.includes('تخمين')) {
+        inferredCategory = 'words';
+        inferredLabel = 'كلمات وتخمين';
+      } else if (cleanPrompt.includes('خداع') || cleanPrompt.includes('مافيا') || cleanPrompt.includes('جاسوس') || cleanPrompt.includes('سر')) {
+        inferredCategory = 'deduction';
+        inferredLabel = 'خداع واستنتاج';
+      } else if (cleanPrompt.includes('رسم') || cleanPrompt.includes('تمثيل') || cleanPrompt.includes('تلفزيون')) {
+        inferredCategory = 'drawing';
+        inferredLabel = 'رسم وتمثيل';
+      }
+
+      const supportsOnline = cleanPrompt.includes('أونلاين') || cleanPrompt.includes('اونلاين') || cleanPrompt.includes('نت') || cleanPrompt.includes('شبكة');
+      const supportsOffline = cleanPrompt.includes('أوفلاين') || cleanPrompt.includes('اوفلاين') || cleanPrompt.includes('جهاز واحد') || cleanPrompt.includes('ديوانية') || !supportsOnline;
+
+      const baseTitle = isEdit ? baseGame.title : cleanPrompt.length <= 25 ? cleanPrompt : cleanPrompt.split(' ').slice(0, 4).join(' ');
+
+      generatedGame = {
+        title: isEdit ? `${baseGame.title} (مطور بالذكاء الاصطناعي)` : baseTitle,
+        subtitle: isEdit ? `تحديث جديد: ${cleanPrompt.slice(0, 40)}` : `تحدي جماعي مشوق: ${cleanPrompt.slice(0, 40)}`,
+        category: isEdit ? baseGame.category : inferredCategory,
+        categoryLabel: isEdit ? baseGame.categoryLabel : inferredLabel,
+        description: isEdit 
+          ? `${baseGame.description} تم التطوير والتحديث وفق طلب المشرف: ${cleanPrompt}`
+          : `لعبة تفاعلية مبتكرة للجمعات والأصدقاء. الفكرة: ${cleanPrompt}. مصممة لإشعال أجواء التنافس والضحك والسرعة بين اللاعبين.`,
+        rules: isEdit ? [
+          ...baseGame.rules,
+          `قاعدة إضافية من الذكاء الاصطناعي: ${cleanPrompt}`
+        ] : [
+          'يجتمع اللاعبون في جلسة واحدة أو عبر غرف اللعب.',
+          `يبدأ التحدي بناءً على الفكرة: ${cleanPrompt.slice(0, 50)}.`,
+          'لكل جولة مؤقت سريع يتطلب الإجابة أو اتخاذ القرار فوراً.',
+          'الفائز هو صاحب أعلى نقاط وسرعة بديهة في نهاية الجولات.'
+        ],
+        minPlayers: isEdit ? baseGame.minPlayers : 2,
+        maxPlayers: isEdit ? baseGame.maxPlayers : 16,
+        durationMinutes: isEdit ? baseGame.durationMinutes : '15 - 20 دقيقة',
+        difficulty: 'حماسي',
+        icon: isEdit ? baseGame.icon : randomIcon,
+        supportsOffline: supportsOffline,
+        supportsOnline: supportsOnline,
+        tags: isEdit ? [...baseGame.tags, 'مطور بالذكاء الاصطناعي'] : ['ابتكار الذكاء الاصطناعي', 'جمعات وديوانيات', 'حماس']
+      };
+      explanation = isEdit 
+        ? `تم تعديل وتطوير لعبة "${baseGame.title}" بنجاح بناءً على توجيهاتك.` 
+        : `تم ابتكار وتوليد لعبة "${generatedGame.title}" بالكامل وتجهيز قواعدها وشرحها.`;
+    }
+
+    res.json({
+      success: true,
+      game: generatedGame,
+      explanation
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'حدث خطأ في توليد اللعبة بالذكاء الاصطناعي' });
+  }
+});
+
 // Admin Import & Export
 app.get('/api/admin/export', requireAdmin, (req, res) => {
   res.json({
@@ -733,6 +889,108 @@ app.post('/api/admin/import', requireAdmin, (req, res) => {
     totalQuestions: questions.length,
     totalGames: games.length
   });
+});
+
+// ==================== BARRAH SALFA CATEGORIES API ====================
+app.get('/api/barrah/categories', (req, res) => {
+  res.json({ categories: barrahCategories });
+});
+
+app.post('/api/admin/barrah/categories', requireAdmin, (req, res) => {
+  const { name, icon, description, words } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'يرجى كتابة اسم القسم' });
+  }
+  const cleanWords = Array.isArray(words) 
+    ? words.map((w: any) => sanitizeText(w, 80)).filter(Boolean)
+    : [];
+
+  const newCat: BarrahCategory = {
+    id: 'c-' + Date.now(),
+    name: sanitizeText(name, 80),
+    icon: sanitizeText(icon || '💬', 10),
+    description: sanitizeText(description || '', 200),
+    words: cleanWords.length > 0 ? cleanWords : ['سالفة أولى', 'سالفة ثانية']
+  };
+
+  barrahCategories.push(newCat);
+  saveDatabase();
+  res.json({ success: true, category: newCat });
+});
+
+app.put('/api/admin/barrah/categories/:id', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const idx = barrahCategories.findIndex(c => c.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'القسم غير موجود' });
+  }
+
+  const { name, icon, description, words } = req.body;
+  if (name) barrahCategories[idx].name = sanitizeText(name, 80);
+  if (icon) barrahCategories[idx].icon = sanitizeText(icon, 10);
+  if (description !== undefined) barrahCategories[idx].description = sanitizeText(description, 200);
+  if (Array.isArray(words)) {
+    barrahCategories[idx].words = words.map((w: any) => sanitizeText(w, 80)).filter(Boolean);
+  }
+
+  saveDatabase();
+  res.json({ success: true, category: barrahCategories[idx] });
+});
+
+app.delete('/api/admin/barrah/categories/:id', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  barrahCategories = barrahCategories.filter(c => c.id !== id);
+  saveDatabase();
+  res.json({ success: true });
+});
+
+// ==================== BUG REPORTS API ====================
+app.post('/api/reports', (req, res) => {
+  const { type, gameTitle, description, reporterName, reporterContact } = req.body;
+  if (!description || !description.trim()) {
+    return res.status(400).json({ error: 'يرجى كتابة تفاصيل البلاغ عن الخلل' });
+  }
+
+  const report: BugReport = {
+    id: 'rep_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    type: sanitizeText(type || 'game_bug', 50),
+    gameTitle: sanitizeText(gameTitle || 'عام', 80),
+    description: sanitizeText(description, 1000),
+    reporterName: sanitizeText(reporterName || 'لاعب مجهول', 80),
+    reporterContact: sanitizeText(reporterContact || '', 100),
+    createdAt: new Date().toISOString(),
+    status: 'new'
+  };
+
+  reports.unshift(report);
+  saveDatabase();
+  res.json({ success: true, message: 'تم إرسال البلاغ للإدارة فوراً، شكراً لمساعدتك في تطوير المنصة!' });
+});
+
+app.get('/api/admin/reports', requireAdmin, (req, res) => {
+  res.json({ reports });
+});
+
+app.put('/api/admin/reports/:id/status', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  const report = reports.find(r => r.id === id);
+  if (!report) {
+    return res.status(404).json({ error: 'البلاغ غير موجود' });
+  }
+  if (status === 'new' || status === 'investigating' || status === 'resolved') {
+    report.status = status;
+    saveDatabase();
+    return res.json({ success: true, report });
+  }
+  res.status(400).json({ error: 'حالة غير صالحة' });
+});
+
+app.delete('/api/admin/reports/:id', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  reports = reports.filter(r => r.id !== id);
+  saveDatabase();
+  res.json({ success: true });
 });
 
 app.get('/api/admin/stats', requireAdmin, (req, res) => {

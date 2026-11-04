@@ -9,6 +9,7 @@ import { OfflineGameRunner } from './components/OfflineGameRunner';
 import { OnlineGameView } from './components/OnlineGameView';
 import { AdminPanel } from './components/AdminPanel';
 import { HowToPlayModal } from './components/HowToPlayModal';
+import { BugReportModal } from './components/BugReportModal';
 import { sound } from './services/soundFx';
 
 export default function App() {
@@ -18,13 +19,14 @@ export default function App() {
   const [games, setGames] = useState<GameInfo[]>(JAMR_GAMES_CATALOG);
   const [selectedGame, setSelectedGame] = useState<GameInfo>(JAMR_GAMES_CATALOG[0]);
 
-  // Player identity (100% free, zero login wall - defaults to 'حمد' or stored name)
+  // Player identity: stored strictly in the user's browser (localStorage), no global database name
   const [playerName, setPlayerName] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('jamr_player_name') || 'حمد';
+      return localStorage.getItem('jamr_player_name') || '';
     }
-    return 'حمد';
+    return '';
   });
+  const [onboardingNameInput, setOnboardingNameInput] = useState<string>('');
 
   // Online Match State
   const [onlineRoomCode, setOnlineRoomCode] = useState<string>('');
@@ -33,6 +35,7 @@ export default function App() {
   // Modals
   const [showAdmin, setShowAdmin] = useState(false);
   const [showHowToPlay, setShowHowToPlay] = useState(false);
+  const [showBugReport, setShowBugReport] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(sound.isEnabled());
 
   // Save player name to local storage whenever it changes
@@ -220,12 +223,19 @@ export default function App() {
               منصة ألعاب عربية مجانية
             </span>
           </div>
-          <div className="flex items-center gap-5 text-purple-300">
+          <div className="flex flex-wrap items-center gap-4 text-purple-300">
             <button 
               onClick={() => setShowHowToPlay(true)} 
               className="hover:text-amber-300 transition-colors cursor-pointer"
             >
               طريقة وقواعد الألعاب
+            </button>
+            <button 
+              onClick={() => setShowBugReport(true)} 
+              className="hover:text-red-400 text-amber-400 font-bold transition-colors flex items-center gap-1.5 cursor-pointer bg-red-950/40 hover:bg-red-950/70 px-3 py-1 rounded-full border border-red-500/40"
+              title="أرسل ملاحظة أو بلاغ عن أي خلل مباشرة للإدارة"
+            >
+              <span>⚠️ إبلاغ عن خلل</span>
             </button>
             <button 
               onClick={() => setShowAdmin(true)} 
@@ -253,6 +263,67 @@ export default function App() {
         <HowToPlayModal
           onClose={() => setShowHowToPlay(false)}
         />
+      )}
+
+      {/* Bug Report Modal (Direct to Admin) */}
+      {showBugReport && (
+        <BugReportModal
+          onClose={() => setShowBugReport(false)}
+          playerName={playerName}
+        />
+      )}
+
+      {/* Mandatory Name Onboarding Modal (Cannot be closed without entering a name) */}
+      {!playerName && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-[#18082c] border-2 border-amber-500 rounded-3xl p-7 text-center text-white shadow-2xl space-y-6 animate-in zoom-in-95">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center mx-auto shadow-lg shadow-orange-500/30 text-3xl">
+              🔥
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-xs font-black text-amber-400 tracking-wider">مرحباً بك في منصة جَمْر</span>
+              <h2 className="text-2xl font-black text-white">اكتب اسمك للبدء</h2>
+              <p className="text-xs text-purple-300/90 leading-relaxed">
+                ادخل اسمك أو لقبك الذي سيعرفه أصحابك في الغرف والجلسات (لا يلزم تسجيل دخول)
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const clean = onboardingNameInput.trim();
+                if (clean) {
+                  handleUpdatePlayerName(clean);
+                  sound.playVictory();
+                }
+              }}
+              className="space-y-4"
+            >
+              <input
+                type="text"
+                value={onboardingNameInput}
+                onChange={(e) => setOnboardingNameInput(e.target.value)}
+                placeholder="مثلاً: محمد، حمد، خالد، سارة..."
+                maxLength={20}
+                autoFocus
+                className="w-full px-4 py-3.5 rounded-2xl border-2 border-purple-600 bg-black/70 text-white font-bold text-center text-base focus:border-amber-400 focus:outline-hidden placeholder:text-purple-400/50"
+              />
+
+              <button
+                type="submit"
+                disabled={!onboardingNameInput.trim()}
+                className={`w-full py-4 rounded-2xl font-black text-sm shadow-xl transition-all ${
+                  onboardingNameInput.trim()
+                    ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-red-500 text-black hover:scale-[1.02] cursor-pointer'
+                    : 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                دخول المنصة وبدء اللعب 🔥
+              </button>
+            </form>
+          </div>
+        </div>
       )}
 
     </div>

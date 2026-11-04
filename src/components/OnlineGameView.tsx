@@ -574,67 +574,99 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
             </div>
           )}
 
-          {/* ================= IN-ROOM CHAT & EMOJI DRAWER ================= */}
+          {/* ================= FLOATING IN-GAME CHAT OVERLAY DRAWER ================= */}
           {showChat && (
-            <div className="rounded-3xl bg-purple-950/90 border border-purple-800/60 p-4 space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between border-b border-purple-900/40 pb-2">
-                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+            <div className="fixed bottom-4 left-4 z-50 w-full max-w-sm rounded-3xl bg-[#1a082c]/95 backdrop-blur-xl border-2 border-orange-500/80 p-4 space-y-3 shadow-2xl animate-in slide-in-from-bottom-5">
+              <div className="flex items-center justify-between border-b border-purple-900/60 pb-2">
+                <span className="text-xs font-black text-white flex items-center gap-1.5">
                   <MessageSquare className="w-4 h-4 text-orange-400" />
-                  <span>دردشة وتفاعلات الغرفة</span>
+                  <span>دردشة الغرفة المباشرة 🔥</span>
                 </span>
-                {/* Quick Emoji Reactions Bar */}
-                <div className="flex gap-1">
-                  {['🔥', '😂', '🎯', '🤔', '👏', '💀'].map(em => (
-                    <button
-                      key={em}
-                      onClick={() => handleSendEmoji(em)}
-                      className="p-1 hover:scale-125 transition-transform text-sm cursor-pointer"
-                    >
-                      {em}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  {/* Quick Emoji Reactions Bar */}
+                  <div className="flex gap-1">
+                    {['🔥', '😂', '🎯', '🤔', '👏', '💀'].map(em => (
+                      <button
+                        key={em}
+                        type="button"
+                        onClick={() => handleSendEmoji(em)}
+                        className="p-0.5 hover:scale-125 transition-transform text-sm cursor-pointer"
+                      >
+                        {em}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setShowChat(false)}
+                    className="p-1 text-purple-300 hover:text-white rounded-lg bg-black/40 text-xs cursor-pointer"
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
 
               {/* Chat Message Stream */}
-              <div className="h-40 overflow-y-auto space-y-2 pr-1 text-xs">
-                {room.messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`p-2 rounded-xl max-w-sm ${
-                      m.isSystem
-                        ? 'bg-orange-500/10 text-orange-300 border border-orange-500/20 text-center mx-auto'
-                        : m.senderId === myPlayerId
-                          ? 'bg-orange-500 text-white mr-auto'
-                          : 'bg-purple-900/40 text-purple-200 ml-auto'
-                    }`}
-                  >
-                    {!m.isSystem && (
-                      <span className="text-[10px] font-bold block opacity-75">{m.senderName}</span>
-                    )}
-                    <span>{m.text}</span>
+              <div className="h-52 overflow-y-auto space-y-2 pr-1 text-xs">
+                {room.messages.length === 0 ? (
+                  <div className="text-center text-purple-400/60 py-8 text-xs">
+                    لا توجد رسائل بعد... ولّع المحادثة برسالة أو إيموجي! 🔥
                   </div>
-                ))}
+                ) : (
+                  room.messages.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`p-2 rounded-xl max-w-[85%] text-right ${
+                        m.isSystem
+                          ? 'bg-orange-500/10 text-orange-300 border border-orange-500/20 text-center mx-auto'
+                          : m.senderId === myPlayerId
+                            ? 'bg-gradient-to-r from-orange-500 to-amber-600 text-white mr-auto'
+                            : 'bg-purple-900/60 border border-purple-800/40 text-purple-100 ml-auto'
+                      }`}
+                    >
+                      {!m.isSystem && (
+                        <span className="text-[10px] font-bold block opacity-75">{m.senderName}</span>
+                      )}
+                      <span className="font-medium">{m.text}</span>
+                    </div>
+                  ))
+                )}
               </div>
 
               {/* Send Chat input */}
-              <form onSubmit={handleSendChat} className="flex gap-2">
+              <form onSubmit={handleSendChat} className="flex gap-2 pt-1">
                 <input
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder="اكتب رسالة للربع..."
-                  className="flex-1 bg-black/50 border border-purple-700/50 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-orange-500"
+                  className="flex-1 bg-black/60 border border-purple-700/60 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-orange-500"
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl text-xs flex items-center gap-1"
+                  disabled={!chatInput.trim()}
+                  className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-40 text-black font-black rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>إرسال</span>
                 </button>
               </form>
             </div>
+          )}
+
+          {/* Floating Chat Trigger Button (Always visible during match) */}
+          {!showChat && (
+            <button
+              onClick={() => setShowChat(true)}
+              className="fixed bottom-4 left-4 z-40 px-4 py-3 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:scale-105 active:scale-95 text-black font-black text-xs shadow-2xl flex items-center gap-2 border-2 border-white/40 cursor-pointer transition-all"
+            >
+              <MessageSquare className="w-4 h-4 fill-black" />
+              <span>الدردشة الحية</span>
+              {room.messages.length > 0 && (
+                <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] font-mono flex items-center justify-center font-bold">
+                  {room.messages.length}
+                </span>
+              )}
+            </button>
           )}
         </div>
       )}
