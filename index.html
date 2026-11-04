@@ -3,6 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Gracefully suppress Vite HMR WebSocket connection errors in preview environments
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event && event.reason;
+        var msg = reason && (reason.message || String(reason));
+        var stack = reason && (reason.stack || '');
+        if (
+          (typeof msg === 'string' && (msg.includes('WebSocket') || msg.includes('vite') || msg.includes('closed without opened'))) ||
+          (typeof stack === 'string' && (stack.includes('@vite/client') || stack.includes('vite')))
+        ) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+      window.addEventListener('error', function(event) {
+        var msg = event && (event.message || '');
+        var file = event && (event.filename || '');
+        if (
+          (typeof msg === 'string' && (msg.includes('WebSocket') || msg.includes('vite'))) ||
+          (typeof file === 'string' && file.includes('@vite/client'))
+        ) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+    </script>
     <title>جمر | العاب جماعية مع الاهل والاصدقاء</title>
     <meta name="description" content="منصة جمر - ألعاب جماعية عربية متكاملة مع الأهل والأصدقاء: برا السالفة، تحدي المعرفة، ممنوع تقول، مين فينا، والمزيد أونلاين وأوفلاين." />
     <meta property="og:title" content="جمر | العاب جماعية مع الاهل والاصدقاء" />
@@ -20,7 +46,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@400;500;600;700;800;900&family=Readex+Pro:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/png" href="/assets/aistudio/IMG_3867_3e4a1eea.png" />
   </head>
-  <body class="bg-[#0b0713] text-[#f5f3ff] antialiased selection:bg-orange-500 selection:text-white min-h-screen">
+  <body class="bg-[#08040d] text-slate-100 antialiased selection:bg-orange-500 selection:text-white min-h-screen font-['Alexandria',sans-serif] overflow-x-hidden">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

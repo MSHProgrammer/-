@@ -3,8 +3,12 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import dotenv from 'dotenv';
-import { QUESTIONS_BANK } from './src/data/questionsBank.ts';
+import { DEFAULT_TOPICS, DEFAULT_QUESTIONS, DEFAULT_SECTIONS } from './src/data/jamrDefaultTopics.ts';
+import { JAMR_GAMES_CATALOG } from './src/data/gamesCatalog.ts';
+import { Topic, Question, Section, JamrMatchState, BoardTile, LifelineType } from './src/types/jamr.ts';
+import { GameInfo } from './src/types/game.ts';
 
 dotenv.config();
 
@@ -15,651 +19,1161 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
+// Anti-Hacking & Cybersecurity Protection Layer
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
+// In-Memory Rate Limiting for DDoS & Abuse Prevention
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+app.use('/api', (req, res, next) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  let record = rateLimitMap.get(ip);
+  if (!record || now > record.resetTime) {
+    record = { count: 1, resetTime: now + 60000 };
+    rateLimitMap.set(ip, record);
+    return next();
+  }
+  record.count++;
+  if (record.count > 180) {
+    return res.status(429).json({ error: 'تم تجاوز الحد المسموح من الطلبات، يرجى الانتظار لحماية الخادم ضد الهجمات' });
+  }
+  next();
+});
+
+// Anti-Brute-Force Tracker for Admin Login
+const loginAttempts = new Map<string, { failedCount: number; lockUntil: number }>();
+
+// Input Sanitization Helper against XSS and Injections
+function sanitizeText(input: any, maxLen = 500): string {
+  if (typeof input !== 'string') return '';
+  return input
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/[<>]/g, '')
+    .trim()
+    .slice(0, maxLen);
+}
 
 // Google Search Console Site Verification
 app.get('/google778ed8bd9063b365.html', (req, res) => {
   res.type('text/html').send('google-site-verification: google778ed8bd9063b365.html');
 });
 
-// In-memory Room State Store
+// Admin Password requested by user (1100321)
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '1100321';
+const ADMIN_TOKEN = 'jamr_admin_token_sec_' + Buffer.from(ADMIN_PASSWORD).toString('base64');
+
+// Data Persistence Layer (File-backed memory store)
+const DB_FILE = path.resolve(__dirname, 'jamr_data_store.json');
+
+let sections: Section[] = [...DEFAULT_SECTIONS];
+let topics: Topic[] = [...DEFAULT_TOPICS];
+let questions: Question[] = [...DEFAULT_QUESTIONS];
+let games: GameInfo[] = [...JAMR_GAMES_CATALOG];
+
+// Load persisted DB if exists
+try {
+  if (fs.existsSync(DB_FILE)) {
+    const raw = fs.readFileSync(DB_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed.sections) && parsed.sections.length > 0) {
+      sections = parsed.sections;
+    }
+    if (Array.isArray(parsed.topics) && parsed.topics.length > 0) {
+      // Reconcile topics to ensure every topic has sectionId and modern comic image
+      const defMap = new Map(DEFAULT_TOPICS.map(t => [t.id, t]));
+      topics = parsed.topics.map((t: Topic) => {
+        const def = defMap.get(t.id);
+        return {
+          ...t,
+          sectionId: t.sectionId || def?.sectionId || 'general',
+          coverImage: t.coverImage || def?.coverImage || ''
+        };
+      });
+      // Add any new default topics that weren't in the saved store
+      for (const defT of DEFAULT_TOPICS) {
+        if (!topics.some(t => t.id === defT.id)) {
+          topics.push(defT);
+        }
+      }
+    }
+    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+      questions = parsed.questions;
+      // Add any missing default questions
+      for (const defQ of DEFAULT_QUESTIONS) {
+        if (!questions.some(q => q.id === defQ.id)) {
+          questions.push(defQ);
+        }
+      }
+    }
+    if (Array.isArray(parsed.games) && parsed.games.length > 0) {
+      games = parsed.games;
+      // Ensure all official default games are present
+      for (const defG of JAMR_GAMES_CATALOG) {
+        if (!games.some(g => g.id === defG.id)) {
+          games.push(defG);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.error('Failed to load jamr_data_store.json:', e);
+}
+
+function saveDatabase() {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify({ sections, topics, questions, games }, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to save jamr_data_store.json:', err);
+  }
+}
+
+// Online Match & Room State Store
 interface ServerPlayer {
   id: string;
   name: string;
+  team: 'team1' | 'team2' | 'spectator';
   avatar: string;
-  score: number;
   isHost: boolean;
   isReady: boolean;
   connected: boolean;
   ws?: WebSocket;
-  secretRole?: string;
-  secretWord?: string;
-  currentAnswer?: any;
-  hasVoted?: boolean;
 }
 
 interface ServerRoom {
   code: string;
-  gameId: string;
   hostId: string;
-  status: 'lobby' | 'playing' | 'round_results' | 'game_over';
-  maxPlayers: number;
-  players: ServerPlayer[];
-  currentRound: number;
-  totalRounds: number;
-  timerSeconds: number;
-  timerActive: boolean;
-  gameData?: any;
-  messages: Array<{ id: string; senderId: string; senderName: string; text: string; timestamp: number; isSystem?: boolean }>;
+  createdAt: number;
   lastActive: number;
-  cleanupTimeout?: NodeJS.Timeout;
+  players: ServerPlayer[];
+  match: JamrMatchState;
+  messages: Array<{
+    id: string;
+    senderId: string;
+    senderName: string;
+    text: string;
+    team?: string;
+    timestamp: number;
+    isSystem?: boolean;
+  }>;
+  timerInterval?: NodeJS.Timeout;
 }
 
 const rooms = new Map<string, ServerRoom>();
 
-// Global platform stats
-let totalGamesPlayedCount = 0;
-let totalConnectionsEver = 0;
-
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     code += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return rooms.has(code) ? generateRoomCode() : code;
 }
 
-function sanitizeRoomForClient(room: ServerRoom, forPlayerId?: string) {
-  return {
-    code: room.code,
-    gameId: room.gameId,
-    hostId: room.hostId,
-    status: room.status,
-    maxPlayers: room.maxPlayers,
-    currentRound: room.currentRound,
-    totalRounds: room.totalRounds,
-    timerSeconds: room.timerSeconds,
-    timerActive: room.timerActive,
-    messages: room.messages,
-    players: room.players.map(p => ({
-      id: p.id,
-      name: p.name,
-      avatar: p.avatar,
-      score: p.score,
-      isHost: p.isHost,
-      isReady: p.isReady,
-      connected: p.connected,
-      hasVoted: p.hasVoted,
-      // Only reveal role if game over, round results, or for self
-      secretRole: (room.status === 'round_results' || room.status === 'game_over' || p.id === forPlayerId) ? p.secretRole : undefined,
-      secretWord: (room.status === 'round_results' || room.status === 'game_over' || p.id === forPlayerId) ? p.secretWord : undefined
-    })),
-    gameData: room.gameData ? getClientSpecificGameData(room, forPlayerId) : undefined
-  };
+// Generate the 6x6 matrix of BoardTiles for chosen 6 topics
+function buildEmptyBoard(chosenTopics: Topic[], topicQuestions: Question[]): BoardTile[][] {
+  const pointDistribution: (200 | 400 | 600)[] = [200, 200, 400, 400, 600, 600];
+  const board: BoardTile[][] = [];
+
+  for (let c = 0; c < 6; c++) {
+    const col: BoardTile[] = [];
+    const t = chosenTopics[c];
+    const tQuestions = topicQuestions.filter(q => q.topicId === t.id);
+
+    for (let r = 0; r < 6; r++) {
+      const targetPoints = pointDistribution[r];
+      // Find a matching question with points, or fallback
+      let matchedQ = tQuestions.find(q => q.points === targetPoints);
+      if (!matchedQ) {
+        matchedQ = tQuestions[r] || {
+          id: `gen-${t.id}-${r}`,
+          topicId: t.id,
+          points: targetPoints,
+          difficulty: r < 2 ? 'easy' : r < 4 ? 'medium' : 'hard',
+          questionText: `سؤال في موضوع ${t.title}`,
+          answerText: 'الإجابة النموذجية',
+          hints: []
+        };
+      }
+
+      col.push({
+        topicId: t.id,
+        questionId: matchedQ.id,
+        points: targetPoints,
+        rowIdx: r,
+        colIdx: c,
+        isUsed: false
+      });
+    }
+    board.push(col);
+  }
+
+  return board;
 }
 
-function getClientSpecificGameData(room: ServerRoom, forPlayerId?: string) {
-  if (!room.gameData) return undefined;
-  const clone = { ...room.gameData };
+function createInitialMatch(chosenTopics?: Topic[], team1Name = 'الفريق الأول', team2Name = 'الفريق الثاني'): JamrMatchState {
+  const selected = (chosenTopics && chosenTopics.length === 6)
+    ? chosenTopics
+    : topics.slice(0, 6);
 
-  // For trivia, hide correct answer during 'playing' status
-  if (room.gameId === 'trivia_spark' || room.gameId === 'fact_or_fiction') {
-    if (room.status === 'playing') {
-      delete clone.correctAnswer;
-      delete clone.explanation;
-    }
-  }
+  const board = buildEmptyBoard(selected, questions);
 
-  // For Barrah Salfa, if player is the odd-one-out, hide the secret word!
-  if (room.gameId === 'barrah_salfa') {
-    const player = room.players.find(p => p.id === forPlayerId);
-    if (player && player.secretRole === 'odd_one' && room.status === 'playing') {
-      clone.secretWord = '??? أنت برا السالفة! حاول تسلّك وما تنكشف! ???';
-    }
-  }
-
-  return clone;
+  return {
+    id: 'match_' + Date.now(),
+    mode: 'local',
+    status: 'setup',
+    teams: {
+      team1: {
+        id: 'team1',
+        name: team1Name,
+        color: '#EA580C', // Orange
+        accentBg: '#FFF7ED',
+        textColor: '#C2410C',
+        score: 0,
+        players: [],
+        lifelines: {
+          two_answers: true,
+          call_friend: true,
+          pitfall: true,
+          bench_player: true,
+          the_trap: true
+        }
+      },
+      team2: {
+        id: 'team2',
+        name: team2Name,
+        color: '#DC2626', // Crimson Red
+        accentBg: '#FEF2F2',
+        textColor: '#B91C1C',
+        score: 0,
+        players: [],
+        lifelines: {
+          two_answers: true,
+          call_friend: true,
+          pitfall: true,
+          bench_player: true,
+          the_trap: true
+        }
+      }
+    },
+    currentTurn: 'team1',
+    topics: selected,
+    board,
+    settings: {
+      timerSeconds: 30,
+      deductOnWrong: false,
+      allowSteal: true,
+      lifelinesEnabled: true,
+      tieBreakerEnabled: true
+    },
+    activeQuestion: null,
+    history: []
+  };
 }
 
 function broadcastRoom(room: ServerRoom) {
   room.lastActive = Date.now();
-  for (const player of room.players) {
-    if (player.ws && player.ws.readyState === WebSocket.OPEN) {
-      const sanitized = sanitizeRoomForClient(room, player.id);
-      player.ws.send(JSON.stringify({ type: 'room_state', room: sanitized }));
+  const payload = JSON.stringify({
+    type: 'room_update',
+    room: {
+      code: room.code,
+      hostId: room.hostId,
+      match: room.match,
+      players: room.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        team: p.team,
+        avatar: p.avatar,
+        isHost: p.isHost,
+        isReady: p.isReady,
+        connected: p.connected
+      })),
+      messages: room.messages
     }
-  }
-}
-
-// Room Timer Tick Interval (Authoritative Server Clock)
-setInterval(() => {
-  for (const room of rooms.values()) {
-    if (room.status === 'playing' && room.timerActive && room.timerSeconds > 0) {
-      room.timerSeconds -= 1;
-      if (room.timerSeconds <= 0) {
-        room.timerActive = false;
-        handleTimerExpired(room);
-      }
-      broadcastRoom(room);
-    }
-  }
-}, 1000);
-
-function handleTimerExpired(room: ServerRoom) {
-  room.status = 'round_results';
-  room.messages.push({
-    id: 'sys_' + Date.now(),
-    senderId: 'system',
-    senderName: 'جَمْر',
-    text: 'انتهى وقت الجولة! لنرى النتائج 🔥',
-    timestamp: Date.now(),
-    isSystem: true
   });
-  broadcastRoom(room);
-}
 
-// Prepare round data depending on chosen game
-function setupRoundData(room: ServerRoom) {
-  room.timerActive = true;
-
-  if (room.gameId === 'barrah_salfa') {
-    const questions = QUESTIONS_BANK.filter(q => q.gameId === 'barrah_salfa');
-    const selected = questions[Math.floor(Math.random() * questions.length)] || questions[0];
-
-    // Pick 1 odd one out player randomly
-    const oddIndex = Math.floor(Math.random() * room.players.length);
-    room.players.forEach((p, idx) => {
-      p.hasVoted = false;
-      if (idx === oddIndex) {
-        p.secretRole = 'odd_one';
-        p.secretWord = 'أنت برا السالفة!';
-      } else {
-        p.secretRole = 'in_the_loop';
-        p.secretWord = selected.secretWord;
-      }
-    });
-
-    room.timerSeconds = 90; // 90 seconds for discussion
-    room.gameData = {
-      category: selected.category,
-      secretCategory: selected.secretCategory,
-      secretWord: selected.secretWord,
-      hints: selected.hints,
-      oddPlayerId: room.players[oddIndex].id,
-      votes: {}
-    };
-  } else if (room.gameId === 'trivia_spark') {
-    const questions = QUESTIONS_BANK.filter(q => q.gameId === 'trivia_spark');
-    const q = questions[(room.currentRound - 1) % questions.length] || questions[0];
-    room.players.forEach(p => {
-      p.hasVoted = false;
-      p.currentAnswer = null;
-    });
-    room.timerSeconds = 15;
-    room.gameData = {
-      questionId: q.id,
-      category: q.category,
-      question: q.question,
-      options: q.options,
-      correctAnswer: q.correctAnswer,
-      explanation: q.explanation,
-      playerAnswers: {}
-    };
-  } else if (room.gameId === 'taboo_words') {
-    const taboos = QUESTIONS_BANK.filter(q => q.gameId === 'taboo_words');
-    const t = taboos[(room.currentRound - 1) % taboos.length] || taboos[0];
-    room.timerSeconds = 60;
-    // Current describer
-    const describer = room.players[(room.currentRound - 1) % room.players.length];
-    room.gameData = {
-      describerId: describer.id,
-      describerName: describer.name,
-      targetWord: t.question,
-      category: t.category,
-      forbiddenWords: t.forbiddenWords,
-      hints: t.hints
-    };
-  } else if (room.gameId === 'who_among_us') {
-    const questions = QUESTIONS_BANK.filter(q => q.gameId === 'who_among_us');
-    const q = questions[(room.currentRound - 1) % questions.length] || questions[0];
-    room.players.forEach(p => { p.hasVoted = false; });
-    room.timerSeconds = 30;
-    room.gameData = {
-      question: q.question,
-      category: q.category,
-      votes: {}
-    };
-  } else if (room.gameId === 'fact_or_fiction') {
-    const facts = QUESTIONS_BANK.filter(q => q.gameId === 'fact_or_fiction');
-    const f = facts[(room.currentRound - 1) % facts.length] || facts[0];
-    room.players.forEach(p => {
-      p.hasVoted = false;
-      p.currentAnswer = null;
-    });
-    room.timerSeconds = 12;
-    room.gameData = {
-      question: f.question,
-      category: f.category,
-      correctAnswer: f.correctAnswer,
-      explanation: f.explanation,
-      playerAnswers: {}
-    };
-  } else if (room.gameId === 'sketch_party') {
-    const sketches = QUESTIONS_BANK.filter(q => q.gameId === 'sketch_party');
-    const s = sketches[(room.currentRound - 1) % sketches.length] || sketches[0];
-    const artist = room.players[(room.currentRound - 1) % room.players.length];
-    room.timerSeconds = 75;
-    room.gameData = {
-      artistId: artist.id,
-      artistName: artist.name,
-      wordToDraw: s.question,
-      hints: s.hints,
-      strokes: [],
-      guesses: []
-    };
-  } else if (room.gameId === 'this_or_that') {
-    const dilemmas = QUESTIONS_BANK.filter(q => q.gameId === 'this_or_that');
-    const d = dilemmas[(room.currentRound - 1) % dilemmas.length] || dilemmas[0];
-    room.players.forEach(p => { p.hasVoted = false; });
-    room.timerSeconds = 25;
-    room.gameData = {
-      question: d.question,
-      category: d.category,
-      optionsAB: d.optionsAB,
-      votes: {}
-    };
-  } else {
-    // Default fallback
-    room.timerSeconds = 30;
-    room.gameData = { generic: true };
+  for (const p of room.players) {
+    if (p.ws && p.ws.readyState === WebSocket.OPEN) {
+      p.ws.send(payload);
+    }
   }
 }
 
-// WebSocket Connection Management
-wss.on('connection', (ws: WebSocket) => {
-  totalConnectionsEver++;
+// REST Endpoints
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    app: 'جَمْر | JAMR - ولّع جمعتكم',
+    topicsCount: topics.length,
+    questionsCount: questions.length,
+    activeRooms: rooms.size
+  });
+});
+
+// Games Catalog Query
+app.get('/api/games', (req, res) => {
+  res.json({ games });
+});
+
+// Topics & Questions Public Query
+app.get('/api/topics', (req, res) => {
+  const result = topics.map(t => ({
+    ...t,
+    questionCount: questions.filter(q => q.topicId === t.id).length
+  }));
+  res.json({ topics: result });
+});
+
+app.get('/api/topics/:id/questions', (req, res) => {
+  const tQuestions = questions.filter(q => q.topicId === req.params.id);
+  res.json({ questions: tQuestions });
+});
+
+// Admin Authentication with Anti-Brute-Force Lockout
+app.post('/api/admin/login', (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const attempt = loginAttempts.get(ip) || { failedCount: 0, lockUntil: 0 };
+
+  // Check if locked out
+  if (attempt.lockUntil > now) {
+    const remainingMin = Math.ceil((attempt.lockUntil - now) / 60000);
+    return res.status(429).json({ 
+      error: `تم حظر محاولات الدخول مؤقتاً بسبب تكرار المحاولات الخاطئة لحماية المنصة. يرجى المحاولة بعد ${remainingMin} دقيقة.` 
+    });
+  }
+
+  const { password } = req.body;
+  if (!password) {
+    return res.status(400).json({ error: 'يرجى إدخال كلمة المرور السرية' });
+  }
+
+  if (password === ADMIN_PASSWORD) {
+    // Reset lockout counter on success
+    loginAttempts.delete(ip);
+    return res.json({
+      success: true,
+      token: ADMIN_TOKEN,
+      message: 'تم تسجيل الدخول بنجاح كمدير لمنصة جمر'
+    });
+  }
+
+  // Failed attempt
+  attempt.failedCount += 1;
+  if (attempt.failedCount >= 5) {
+    attempt.lockUntil = now + 15 * 60000; // 15 minutes lockout
+    loginAttempts.set(ip, attempt);
+    return res.status(429).json({
+      error: 'تم تجاوز الحد المسموح من المحاولات (5 محاولات). تم قفل المحاولات لمدة 15 دقيقة لحماية السيرفر.'
+    });
+  } else {
+    loginAttempts.set(ip, attempt);
+    const left = 5 - attempt.failedCount;
+    return res.status(401).json({ 
+      error: `رمز الدخول غير صحيح! متبقي لديك ${left} محاولات قبل القفل المؤقت للأمان.` 
+    });
+  }
+});
+
+// Middleware for Admin Protected Endpoints
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'غير مصرح بالوصول' });
+  }
+  const token = authHeader.replace('Bearer ', '');
+  if (token !== ADMIN_TOKEN) {
+    return res.status(403).json({ error: 'رمز الجلسة غير صالح' });
+  }
+  next();
+}
+
+// Sections Public Query
+app.get('/api/sections', (req, res) => {
+  const result = sections.map(s => ({
+    ...s,
+    topicCount: topics.filter(t => t.sectionId === s.id).length
+  }));
+  res.json({ sections: result });
+});
+
+// Admin Section Operations
+app.post('/api/admin/sections', requireAdmin, (req, res) => {
+  const { title, description, icon } = req.body;
+  if (!title) {
+    return res.status(400).json({ error: 'اسم القسم مطلوب' });
+  }
+  const id = 'sec_' + Date.now() + Math.random().toString(36).substring(2, 5);
+  const newSection: Section = {
+    id,
+    title: String(title).trim(),
+    description: String(description || '').trim(),
+    icon: icon || 'Sparkles',
+    order: sections.length + 1
+  };
+  sections.push(newSection);
+  saveDatabase();
+  res.json({ success: true, section: newSection });
+});
+
+app.put('/api/admin/sections/:id', requireAdmin, (req, res) => {
+  const idx = sections.findIndex(s => s.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'القسم غير موجود' });
+  }
+  const { title, description, icon, order } = req.body;
+  sections[idx] = {
+    ...sections[idx],
+    title: title ? String(title).trim() : sections[idx].title,
+    description: description !== undefined ? String(description).trim() : sections[idx].description,
+    icon: icon || sections[idx].icon,
+    order: order !== undefined ? Number(order) : sections[idx].order
+  };
+  saveDatabase();
+  res.json({ success: true, section: sections[idx] });
+});
+
+app.delete('/api/admin/sections/:id', requireAdmin, (req, res) => {
+  const id = req.params.id;
+  // If topics exist in this section, reassign them to general
+  topics = topics.map(t => t.sectionId === id ? { ...t, sectionId: 'general' } : t);
+  sections = sections.filter(s => s.id !== id);
+  saveDatabase();
+  res.json({ success: true, message: 'تم حذف القسم بنجاح' });
+});
+
+// Admin Topic Operations
+app.post('/api/admin/topics', requireAdmin, (req, res) => {
+  const { title, description, coverImage, sectionId, category, icon } = req.body;
+  if (!title || !coverImage) {
+    return res.status(400).json({ error: 'عنوان الموضوع وصورة الغلاف مطلوبة' });
+  }
+  const id = 'topic_' + Date.now() + Math.random().toString(36).substring(2, 5);
+  const targetSectionId = sectionId || (sections[0]?.id || 'general');
+  const matchedSec = sections.find(s => s.id === targetSectionId);
+
+  const newTopic: Topic = {
+    id,
+    title: String(title).trim(),
+    description: String(description || '').trim(),
+    coverImage: String(coverImage).trim(),
+    sectionId: targetSectionId,
+    category: String(category || matchedSec?.title || 'عام').trim(),
+    icon: icon || 'Sparkles',
+    questionCount: 0,
+    isPopular: false,
+    createdAt: Date.now()
+  };
+  topics.unshift(newTopic);
+  saveDatabase();
+  res.json({ success: true, topic: newTopic });
+});
+
+app.put('/api/admin/topics/:id', requireAdmin, (req, res) => {
+  const idx = topics.findIndex(t => t.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'الموضوع غير موجود' });
+  }
+  const { title, description, coverImage, sectionId, category, icon, isPopular } = req.body;
+  const targetSectionId = sectionId || topics[idx].sectionId;
+  const matchedSec = sections.find(s => s.id === targetSectionId);
+
+  topics[idx] = {
+    ...topics[idx],
+    title: title ? String(title).trim() : topics[idx].title,
+    description: description !== undefined ? String(description).trim() : topics[idx].description,
+    coverImage: coverImage ? String(coverImage).trim() : topics[idx].coverImage,
+    sectionId: targetSectionId,
+    category: category ? String(category).trim() : (matchedSec?.title || topics[idx].category),
+    icon: icon || topics[idx].icon,
+    isPopular: isPopular !== undefined ? Boolean(isPopular) : topics[idx].isPopular
+  };
+  saveDatabase();
+  res.json({ success: true, topic: topics[idx] });
+});
+
+app.put('/api/admin/topics/:id/image', requireAdmin, (req, res) => {
+  const idx = topics.findIndex(t => t.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'الموضوع غير موجود' });
+  }
+  const { coverImage } = req.body;
+  if (!coverImage) {
+    return res.status(400).json({ error: 'رابط الصورة مطلوب' });
+  }
+  topics[idx].coverImage = String(coverImage).trim();
+  saveDatabase();
+  res.json({ success: true, topic: topics[idx], message: 'تم تحديث صورة الموضوع بنجاح' });
+});
+
+app.delete('/api/admin/topics/:id', requireAdmin, (req, res) => {
+  const id = req.params.id;
+  topics = topics.filter(t => t.id !== id);
+  questions = questions.filter(q => q.topicId !== id);
+  saveDatabase();
+  res.json({ success: true, message: 'تم حذف الموضوع وأسئلته بنجاح' });
+});
+
+// Admin Question Operations
+app.post('/api/admin/questions', requireAdmin, (req, res) => {
+  const { topicId, points, questionText, answerText, hints, explanation, challengeType, mediaUrl, mediaType } = req.body;
+  if (!topicId || !points || !questionText || !answerText) {
+    return res.status(400).json({ error: 'الموضوع وقيمة النقاط ونص السؤال والإجابة مطلوبة' });
+  }
+  const qPoints = Number(points) as (200 | 400 | 600);
+  const diff = qPoints <= 200 ? 'easy' : qPoints <= 400 ? 'medium' : 'hard';
+
+  const cleanMediaUrl = mediaUrl ? String(mediaUrl).trim() : undefined;
+  const inferredType = mediaType || (cleanMediaUrl ? (
+    cleanMediaUrl.includes('youtube.com') || cleanMediaUrl.includes('youtu.be') || cleanMediaUrl.match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i)
+      ? 'video'
+      : 'image'
+  ) : undefined);
+
+  const newQ: Question = {
+    id: 'q_' + Date.now() + Math.random().toString(36).substring(2, 6),
+    topicId,
+    points: qPoints,
+    difficulty: diff,
+    questionText: String(questionText).trim(),
+    answerText: String(answerText).trim(),
+    hints: Array.isArray(hints) ? hints.filter(Boolean) : [],
+    explanation: explanation ? String(explanation).trim() : undefined,
+    challengeType: challengeType || 'normal',
+    mediaUrl: cleanMediaUrl,
+    mediaType: cleanMediaUrl ? inferredType : undefined,
+    createdAt: Date.now()
+  };
+  questions.push(newQ);
+  saveDatabase();
+  res.json({ success: true, question: newQ });
+});
+
+app.put('/api/admin/questions/:id', requireAdmin, (req, res) => {
+  const idx = questions.findIndex(q => q.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'السؤال غير موجود' });
+  }
+  const { topicId, points, questionText, answerText, hints, explanation, challengeType, mediaUrl, mediaType } = req.body;
+  const oldQ = questions[idx];
+  const qPoints = points ? (Number(points) as (200 | 400 | 600)) : oldQ.points;
+  const diff = qPoints <= 200 ? 'easy' : qPoints <= 400 ? 'medium' : 'hard';
+
+  const targetMediaUrl = mediaUrl !== undefined ? (mediaUrl ? String(mediaUrl).trim() : undefined) : oldQ.mediaUrl;
+  let targetMediaType = mediaType !== undefined ? mediaType : oldQ.mediaType;
+  if (!targetMediaType && targetMediaUrl) {
+    targetMediaType = (
+      targetMediaUrl.includes('youtube.com') || targetMediaUrl.includes('youtu.be') || targetMediaUrl.match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i)
+        ? 'video'
+        : 'image'
+    );
+  }
+
+  questions[idx] = {
+    ...oldQ,
+    topicId: topicId || oldQ.topicId,
+    points: qPoints,
+    difficulty: diff,
+    questionText: questionText ? String(questionText).trim() : oldQ.questionText,
+    answerText: answerText ? String(answerText).trim() : oldQ.answerText,
+    hints: Array.isArray(hints) ? hints.filter(Boolean) : oldQ.hints,
+    explanation: explanation !== undefined ? String(explanation).trim() : oldQ.explanation,
+    challengeType: challengeType || oldQ.challengeType,
+    mediaUrl: targetMediaUrl,
+    mediaType: targetMediaUrl ? targetMediaType : undefined
+  };
+  saveDatabase();
+  res.json({ success: true, question: questions[idx] });
+});
+
+app.delete('/api/admin/questions/:id', requireAdmin, (req, res) => {
+  const id = req.params.id;
+  questions = questions.filter(q => q.id !== id);
+  saveDatabase();
+  res.json({ success: true, message: 'تم حذف السؤال بنجاح' });
+});
+
+// Admin Games CRUD Operations
+app.post('/api/admin/games', requireAdmin, (req, res) => {
+  const { title, subtitle, category, categoryLabel, description, rules, minPlayers, maxPlayers, durationMinutes, difficulty, icon, accentColor, bgGradient, supportsOffline, supportsOnline, tags, engineType } = req.body;
+  if (!title) {
+    return res.status(400).json({ error: 'اسم اللعبة مطلوب' });
+  }
+  const newGame: GameInfo = {
+    id: 'game_' + Date.now() + Math.random().toString(36).substring(2, 6),
+    title: String(title).trim(),
+    subtitle: subtitle ? String(subtitle).trim() : 'لعبة جماعية ممتعة',
+    category: category || 'party',
+    categoryLabel: categoryLabel || 'جمعات وضحك',
+    description: description ? String(description).trim() : '',
+    rules: Array.isArray(rules) && rules.length > 0 ? rules.map(r => String(r).trim()).filter(Boolean) : ['اتبع تعليمات اللعبة وقواعد التنافس العادل.'],
+    minPlayers: Number(minPlayers) || 2,
+    maxPlayers: Number(maxPlayers) || 16,
+    durationMinutes: durationMinutes ? String(durationMinutes).trim() : '15 دقيقة',
+    difficulty: difficulty || 'متوسط',
+    icon: icon || '🎮',
+    accentColor: accentColor || '#f59e0b',
+    bgGradient: bgGradient || 'from-amber-600/30 via-orange-950/40 to-black',
+    tags: Array.isArray(tags) ? tags : ['لعبة جديدة'],
+    supportsOffline: supportsOffline !== undefined ? Boolean(supportsOffline) : true,
+    supportsOnline: supportsOnline !== undefined ? Boolean(supportsOnline) : false,
+    engineType: engineType || 'trivia',
+    isActive: true,
+    isNew: true
+  };
+  games.push(newGame);
+  saveDatabase();
+  res.json({ success: true, game: newGame });
+});
+
+app.put('/api/admin/games/:id', requireAdmin, (req, res) => {
+  const idx = games.findIndex(g => g.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'اللعبة غير موجودة' });
+  }
+  const { title, subtitle, category, categoryLabel, description, rules, minPlayers, maxPlayers, durationMinutes, difficulty, icon, accentColor, bgGradient, supportsOffline, supportsOnline, tags, engineType, isPopular, isNew, isActive } = req.body;
+  
+  games[idx] = {
+    ...games[idx],
+    title: title ? String(title).trim() : games[idx].title,
+    subtitle: subtitle !== undefined ? String(subtitle).trim() : games[idx].subtitle,
+    category: category || games[idx].category,
+    categoryLabel: categoryLabel || games[idx].categoryLabel,
+    description: description !== undefined ? String(description).trim() : games[idx].description,
+    rules: Array.isArray(rules) ? rules.map(r => String(r).trim()).filter(Boolean) : games[idx].rules,
+    minPlayers: minPlayers !== undefined ? Number(minPlayers) : games[idx].minPlayers,
+    maxPlayers: maxPlayers !== undefined ? Number(maxPlayers) : games[idx].maxPlayers,
+    durationMinutes: durationMinutes !== undefined ? String(durationMinutes).trim() : games[idx].durationMinutes,
+    difficulty: difficulty || games[idx].difficulty,
+    icon: icon || games[idx].icon,
+    accentColor: accentColor || games[idx].accentColor,
+    bgGradient: bgGradient || games[idx].bgGradient,
+    supportsOffline: supportsOffline !== undefined ? Boolean(supportsOffline) : games[idx].supportsOffline,
+    supportsOnline: supportsOnline !== undefined ? Boolean(supportsOnline) : games[idx].supportsOnline,
+    tags: Array.isArray(tags) ? tags : games[idx].tags,
+    engineType: engineType || games[idx].engineType,
+    isPopular: isPopular !== undefined ? Boolean(isPopular) : games[idx].isPopular,
+    isNew: isNew !== undefined ? Boolean(isNew) : games[idx].isNew,
+    isActive: isActive !== undefined ? Boolean(isActive) : games[idx].isActive
+  };
+  saveDatabase();
+  res.json({ success: true, game: games[idx] });
+});
+
+app.delete('/api/admin/games/:id', requireAdmin, (req, res) => {
+  const id = req.params.id;
+  if (games.length <= 1) {
+    return res.status(400).json({ error: 'لا يمكن حذف آخر لعبة في المنصة' });
+  }
+  games = games.filter(g => g.id !== id);
+  saveDatabase();
+  res.json({ success: true, message: 'تم حذف اللعبة بنجاح' });
+});
+
+app.post('/api/admin/games/reset', requireAdmin, (req, res) => {
+  games = [...JAMR_GAMES_CATALOG];
+  saveDatabase();
+  res.json({ success: true, games });
+});
+
+// Admin Import & Export
+app.get('/api/admin/export', requireAdmin, (req, res) => {
+  res.json({
+    platform: 'JAMR - جَمْر',
+    exportDate: new Date().toISOString(),
+    topics,
+    questions,
+    games
+  });
+});
+
+app.post('/api/admin/import', requireAdmin, (req, res) => {
+  const { importedTopics, importedQuestions, importedGames, mode } = req.body;
+  if (!Array.isArray(importedTopics) && !Array.isArray(importedQuestions) && !Array.isArray(importedGames)) {
+    return res.status(400).json({ error: 'البيانات غير صالحة للاستيراد' });
+  }
+  if (mode === 'replace') {
+    if (Array.isArray(importedTopics)) topics = importedTopics;
+    if (Array.isArray(importedQuestions)) questions = importedQuestions;
+    if (Array.isArray(importedGames)) games = importedGames;
+  } else {
+    // Append unique
+    if (Array.isArray(importedTopics)) {
+      for (const t of importedTopics) {
+        if (!topics.some(existing => existing.id === t.id)) {
+          topics.push(t);
+        }
+      }
+    }
+    if (Array.isArray(importedQuestions)) {
+      for (const q of importedQuestions) {
+        if (!questions.some(existing => existing.id === q.id)) {
+          questions.push(q);
+        }
+      }
+    }
+    if (Array.isArray(importedGames)) {
+      for (const g of importedGames) {
+        if (!games.some(existing => existing.id === g.id)) {
+          games.push(g);
+        }
+      }
+    }
+  }
+  saveDatabase();
+  res.json({
+    success: true,
+    totalTopics: topics.length,
+    totalQuestions: questions.length,
+    totalGames: games.length
+  });
+});
+
+app.get('/api/admin/stats', requireAdmin, (req, res) => {
+  res.json({
+    totalTopics: topics.length,
+    totalQuestions: questions.length,
+    activeRoomsCount: rooms.size,
+    rooms: Array.from(rooms.values()).map(r => ({
+      code: r.code,
+      hostName: r.players.find(p => p.isHost)?.name || 'غير معروف',
+      playerCount: r.players.length,
+      createdAt: r.createdAt,
+      status: r.match.status,
+      scores: {
+        team1: r.match.teams.team1.score,
+        team2: r.match.teams.team2.score
+      }
+    }))
+  });
+});
+
+// Online Room Creation & Retrieval
+app.post('/api/rooms/create', (req, res) => {
+  const { hostName, avatar, chosenTopicIds } = req.body;
+  const code = generateRoomCode();
+  const hostId = 'p_' + Date.now() + Math.random().toString(36).substring(2, 6);
+
+  let selectedTopics = topics.slice(0, 6);
+  if (Array.isArray(chosenTopicIds) && chosenTopicIds.length === 6) {
+    const custom = chosenTopicIds.map((id: string) => topics.find(t => t.id === id)).filter(Boolean) as Topic[];
+    if (custom.length === 6) selectedTopics = custom;
+  }
+
+  const match = createInitialMatch(selectedTopics);
+  match.mode = 'online';
+
+  const hostPlayer: ServerPlayer = {
+    id: hostId,
+    name: hostName ? String(hostName).trim() : 'المضيف',
+    team: 'team1',
+    avatar: avatar || '🔥',
+    isHost: true,
+    isReady: true,
+    connected: false
+  };
+
+  const newRoom: ServerRoom = {
+    code,
+    hostId,
+    createdAt: Date.now(),
+    lastActive: Date.now(),
+    players: [hostPlayer],
+    match,
+    messages: [
+      {
+        id: 'msg_welcome',
+        senderId: 'system',
+        senderName: 'جَمْر',
+        text: `أهلاً بكم في غرفة جمر! رمز الغرفة: ${code}`,
+        timestamp: Date.now(),
+        isSystem: true
+      }
+    ]
+  };
+
+  rooms.set(code, newRoom);
+  res.json({ success: true, code, playerId: hostId, match });
+});
+
+app.get('/api/rooms/:code', (req, res) => {
+  const code = req.params.code?.toUpperCase();
+  const room = rooms.get(code);
+  if (!room) {
+    return res.status(404).json({ error: 'الغرفة غير موجودة أو انتهت' });
+  }
+  res.json({
+    code: room.code,
+    hostId: room.hostId,
+    players: room.players.map(p => ({
+      id: p.id,
+      name: p.name,
+      team: p.team,
+      avatar: p.avatar,
+      isHost: p.isHost,
+      isReady: p.isReady,
+      connected: p.connected
+    })),
+    match: room.match,
+    messages: room.messages
+  });
+});
+
+// Realtime WebSocket Server for Live Matches
+wss.on('connection', (ws) => {
   let currentRoomCode: string | null = null;
   let currentPlayerId: string | null = null;
 
-  ws.on('message', (data: string) => {
+  ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString());
+      const type = msg.type;
 
-      if (msg.type === 'create_room') {
-        const { playerName, avatar, gameId } = msg;
-        const code = generateRoomCode();
-        const playerId = 'p_' + Math.random().toString(36).substring(2, 9);
-        const player: ServerPlayer = {
-          id: playerId,
-          name: playerName || 'مضيف جَمْر',
-          avatar: avatar || '🔥',
-          score: 0,
-          isHost: true,
-          isReady: true,
-          connected: true,
-          ws
-        };
-
-        const newRoom: ServerRoom = {
-          code,
-          gameId: gameId || 'barrah_salfa',
-          hostId: playerId,
-          status: 'lobby',
-          maxPlayers: 12,
-          players: [player],
-          currentRound: 1,
-          totalRounds: 5,
-          timerSeconds: 0,
-          timerActive: false,
-          messages: [
-            {
-              id: 'sys_' + Date.now(),
-              senderId: 'system',
-              senderName: 'جَمْر',
-              text: `تم إنشاء الغرفة بنجاح! شارك الرمز: ${code}`,
-              timestamp: Date.now(),
-              isSystem: true
-            }
-          ],
-          lastActive: Date.now()
-        };
-
-        rooms.set(code, newRoom);
-        currentRoomCode = code;
-        currentPlayerId = playerId;
-
-        ws.send(JSON.stringify({
-          type: 'joined',
-          roomCode: code,
-          playerId,
-          room: sanitizeRoomForClient(newRoom, playerId)
-        }));
-      }
-
-      else if (msg.type === 'join_room') {
-        const { roomCode, playerName, avatar, existingPlayerId } = msg;
-        const room = rooms.get(roomCode?.toUpperCase());
-
+      // 1. Join Room
+      if (type === 'join_room') {
+        const { code, playerId, name, avatar, team } = msg;
+        const normalizedCode = String(code).toUpperCase().trim();
+        const room = rooms.get(normalizedCode);
         if (!room) {
-          ws.send(JSON.stringify({ type: 'error', message: 'رمز الغرفة غير صحيح أو انتهت الجلسة!' }));
+          ws.send(JSON.stringify({ type: 'error', message: 'الغرفة غير موجودة' }));
           return;
         }
 
-        // Check if reconnecting existing player
-        if (existingPlayerId) {
-          const existing = room.players.find(p => p.id === existingPlayerId);
-          if (existing) {
-            existing.connected = true;
-            existing.ws = ws;
-            if (playerName) existing.name = playerName;
-            if (avatar) existing.avatar = avatar;
-            currentRoomCode = room.code;
-            currentPlayerId = existing.id;
+        currentRoomCode = normalizedCode;
+        let player = room.players.find(p => p.id === playerId);
+        if (!player) {
+          const newPlayerId = playerId || ('p_' + Date.now() + Math.random().toString(36).substring(2, 6));
+          // Balance team assignment
+          const t1Count = room.players.filter(p => p.team === 'team1').length;
+          const t2Count = room.players.filter(p => p.team === 'team2').length;
+          const assignedTeam = team || (t1Count <= t2Count ? 'team1' : 'team2');
 
-            ws.send(JSON.stringify({
-              type: 'joined',
-              roomCode: room.code,
-              playerId: existing.id,
-              room: sanitizeRoomForClient(room, existing.id)
-            }));
-            broadcastRoom(room);
-            return;
-          }
+          player = {
+            id: newPlayerId,
+            name: String(name || 'لاعب جمر').trim(),
+            team: assignedTeam,
+            avatar: avatar || '⚡',
+            isHost: room.players.length === 0,
+            isReady: false,
+            connected: true,
+            ws
+          };
+          room.players.push(player);
+          currentPlayerId = newPlayerId;
+        } else {
+          player.connected = true;
+          player.ws = ws;
+          currentPlayerId = player.id;
+          if (name) player.name = String(name).trim();
+          if (avatar) player.avatar = avatar;
         }
-
-        if (room.players.length >= room.maxPlayers) {
-          ws.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة بالكامل!' }));
-          return;
-        }
-
-        const newPlayerId = 'p_' + Math.random().toString(36).substring(2, 9);
-        const newPlayer: ServerPlayer = {
-          id: newPlayerId,
-          name: playerName || `لاعب ${room.players.length + 1}`,
-          avatar: avatar || '🎮',
-          score: 0,
-          isHost: false,
-          isReady: false,
-          connected: true,
-          ws
-        };
-
-        room.players.push(newPlayer);
-        currentRoomCode = room.code;
-        currentPlayerId = newPlayerId;
-
-        room.messages.push({
-          id: 'sys_' + Date.now(),
-          senderId: 'system',
-          senderName: 'جَمْر',
-          text: `انضم ${newPlayer.name} إلى السهرة! 👋`,
-          timestamp: Date.now(),
-          isSystem: true
-        });
 
         ws.send(JSON.stringify({
-          type: 'joined',
-          roomCode: room.code,
-          playerId: newPlayerId,
-          room: sanitizeRoomForClient(room, newPlayerId)
+          type: 'joined_success',
+          playerId: player.id,
+          isHost: player.isHost,
+          team: player.team
         }));
 
         broadcastRoom(room);
+        return;
       }
 
-      else if (msg.type === 'toggle_ready') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room) return;
-        const player = room.players.find(p => p.id === currentPlayerId);
-        if (player) {
-          player.isReady = !player.isReady;
+      if (!currentRoomCode || !currentPlayerId) return;
+      const room = rooms.get(currentRoomCode);
+      if (!room) return;
+      const player = room.players.find(p => p.id === currentPlayerId);
+      if (!player) return;
+
+      // 2. Change Team / Toggle Ready
+      if (type === 'set_team') {
+        const { targetTeam } = msg;
+        if (targetTeam === 'team1' || targetTeam === 'team2' || targetTeam === 'spectator') {
+          player.team = targetTeam;
           broadcastRoom(room);
         }
+        return;
       }
 
-      else if (msg.type === 'change_game') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.hostId !== currentPlayerId) return;
-        room.gameId = msg.gameId;
+      if (type === 'toggle_ready') {
+        player.isReady = !player.isReady;
+        broadcastRoom(room);
+        return;
+      }
+
+      // 3. Configure and Start Match (Host Only)
+      if (type === 'start_match') {
+        if (!player.isHost) return;
+        const { chosenTopicIds, team1Name, team2Name, timerSeconds, deductOnWrong } = msg;
+
+        let selected = topics.slice(0, 6);
+        if (Array.isArray(chosenTopicIds) && chosenTopicIds.length === 6) {
+          const custom = chosenTopicIds.map((id: string) => topics.find(t => t.id === id)).filter(Boolean) as Topic[];
+          if (custom.length === 6) selected = custom;
+        }
+
+        const freshMatch = createInitialMatch(
+          selected,
+          team1Name || room.match.teams.team1.name,
+          team2Name || room.match.teams.team2.name
+        );
+        freshMatch.mode = 'online';
+        freshMatch.status = 'playing';
+        if (timerSeconds) freshMatch.settings.timerSeconds = Number(timerSeconds);
+        if (deductOnWrong !== undefined) freshMatch.settings.deductOnWrong = Boolean(deductOnWrong);
+
+        // Populate team player lists
+        freshMatch.teams.team1.players = room.players.filter(p => p.team === 'team1').map(p => p.name);
+        freshMatch.teams.team2.players = room.players.filter(p => p.team === 'team2').map(p => p.name);
+
+        room.match = freshMatch;
         room.messages.push({
           id: 'sys_' + Date.now(),
           senderId: 'system',
           senderName: 'جَمْر',
-          text: `غيّر المضيف اللعبة إلى: ${msg.gameTitle || msg.gameId}`,
+          text: '🔥 بدأت المباراة بين الفريقين! أوقدوا الحماس!',
           timestamp: Date.now(),
           isSystem: true
         });
+
         broadcastRoom(room);
+        return;
       }
 
-      else if (msg.type === 'kick_player') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.hostId !== currentPlayerId) return;
-        const targetId = msg.targetPlayerId;
-        const target = room.players.find(p => p.id === targetId);
-        if (target && target.id !== room.hostId) {
-          if (target.ws && target.ws.readyState === WebSocket.OPEN) {
-            target.ws.send(JSON.stringify({ type: 'kicked', message: 'تم استبعادك من الغرفة بواسطة المضيف.' }));
-          }
-          room.players = room.players.filter(p => p.id !== targetId);
-          broadcastRoom(room);
-        }
-      }
+      // 4. Select Board Tile (Turn team or Host)
+      if (type === 'select_tile') {
+        const { col, row } = msg;
+        const tile = room.match.board[col]?.[row];
+        if (!tile || tile.isUsed) return;
 
-      else if (msg.type === 'start_game') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.hostId !== currentPlayerId) return;
+        const q = questions.find(item => item.id === tile.questionId);
+        const t = room.match.topics[col];
+        if (!q || !t) return;
 
-        totalGamesPlayedCount++;
-        room.status = 'playing';
-        room.currentRound = 1;
-        room.players.forEach(p => p.score = 0);
-        setupRoundData(room);
-        broadcastRoom(room);
-      }
-
-      else if (msg.type === 'next_round') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.hostId !== currentPlayerId) return;
-
-        if (room.currentRound >= room.totalRounds) {
-          room.status = 'game_over';
-          broadcastRoom(room);
-        } else {
-          room.currentRound += 1;
-          room.status = 'playing';
-          setupRoundData(room);
-          broadcastRoom(room);
-        }
-      }
-
-      else if (msg.type === 'return_to_lobby') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.hostId !== currentPlayerId) return;
-        room.status = 'lobby';
-        room.players.forEach(p => {
-          p.isReady = false;
-          p.hasVoted = false;
-          p.currentAnswer = null;
-        });
-        broadcastRoom(room);
-      }
-
-      else if (msg.type === 'submit_trivia_answer') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.status !== 'playing' || !room.gameData) return;
-
-        const { answer, timeRemaining } = msg;
-        const player = room.players.find(p => p.id === currentPlayerId);
-        if (player && !player.hasVoted) {
-          player.hasVoted = true;
-          player.currentAnswer = answer;
-          room.gameData.playerAnswers[player.id] = answer;
-
-          // Check if correct
-          const isCorrect = answer === room.gameData.correctAnswer;
-          if (isCorrect) {
-            const timeBonus = Math.max(10, Math.round((timeRemaining || 5) * 8));
-            player.score += 100 + timeBonus;
-          }
-
-          // Check if all players answered
-          const allAnswered = room.players.every(p => p.hasVoted);
-          if (allAnswered) {
-            room.timerActive = false;
-            room.status = 'round_results';
-          }
-          broadcastRoom(room);
-        }
-      }
-
-      else if (msg.type === 'submit_barrah_vote') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || !room.gameData) return;
-
-        const { votedPlayerId } = msg;
-        const player = room.players.find(p => p.id === currentPlayerId);
-        if (player && !player.hasVoted) {
-          player.hasVoted = true;
-          room.gameData.votes[player.id] = votedPlayerId;
-
-          const allVoted = room.players.every(p => p.hasVoted);
-          if (allVoted) {
-            // Count votes
-            const counts: Record<string, number> = {};
-            Object.values(room.gameData.votes).forEach((targetId: any) => {
-              counts[targetId] = (counts[targetId] || 0) + 1;
-            });
-            let maxVotes = 0;
-            let accusedPlayerId = '';
-            for (const [pId, cnt] of Object.entries(counts)) {
-              if (cnt > maxVotes) {
-                maxVotes = cnt;
-                accusedPlayerId = pId;
-              }
-            }
-
-            const oddId = room.gameData.oddPlayerId;
-            const caught = accusedPlayerId === oddId;
-
-            // Score allocation
-            room.players.forEach(p => {
-              if (p.id !== oddId) {
-                if (room.gameData.votes[p.id] === oddId) {
-                  p.score += 120; // correct vote bonus
-                }
-              } else {
-                if (!caught) {
-                  p.score += 250; // odd escaped
-                }
-              }
-            });
-
-            room.gameData.accusedPlayerId = accusedPlayerId;
-            room.gameData.caught = caught;
-            room.status = 'round_results';
-          }
-          broadcastRoom(room);
-        }
-      }
-
-      else if (msg.type === 'submit_who_among_us_vote') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || !room.gameData) return;
-
-        const { targetPlayerId } = msg;
-        const player = room.players.find(p => p.id === currentPlayerId);
-        if (player && !player.hasVoted) {
-          player.hasVoted = true;
-          room.gameData.votes[player.id] = targetPlayerId;
-
-          const allVoted = room.players.every(p => p.hasVoted);
-          if (allVoted) {
-            // Award points for most voted and those who agreed
-            const counts: Record<string, number> = {};
-            Object.values(room.gameData.votes).forEach((tid: any) => {
-              counts[tid] = (counts[tid] || 0) + 1;
-            });
-            let highestTid = '';
-            let maxC = 0;
-            for (const [tid, c] of Object.entries(counts)) {
-              if (c > maxC) { maxC = c; highestTid = tid; }
-            }
-            room.players.forEach(p => {
-              if (room.gameData.votes[p.id] === highestTid) {
-                p.score += 80;
-              }
-            });
-            room.gameData.highestVotedPlayerId = highestTid;
-            room.status = 'round_results';
-          }
-          broadcastRoom(room);
-        }
-      }
-
-      else if (msg.type === 'taboo_score_action') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || room.status !== 'playing' || !room.gameData) return;
-        const { action } = msg; // 'correct', 'forbidden_buzz', 'skip'
-        const describer = room.players.find(p => p.id === room.gameData.describerId);
-
-        if (action === 'correct') {
-          if (describer) describer.score += 50;
-          // cycle to next card
-          const taboos = QUESTIONS_BANK.filter(q => q.gameId === 'taboo_words');
-          const nextT = taboos[Math.floor(Math.random() * taboos.length)];
-          room.gameData.targetWord = nextT.question;
-          room.gameData.forbiddenWords = nextT.forbiddenWords;
-        } else if (action === 'forbidden_buzz') {
-          if (describer) describer.score = Math.max(0, describer.score - 30);
-        }
-        broadcastRoom(room);
-      }
-
-      else if (msg.type === 'sketch_stroke') {
-        if (!currentRoomCode) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room || !room.gameData || !room.gameData.strokes) return;
-        room.gameData.strokes.push(msg.stroke);
-        // Relay stroke to all other players in room
-        for (const p of room.players) {
-          if (p.id !== currentPlayerId && p.ws && p.ws.readyState === WebSocket.OPEN) {
-            p.ws.send(JSON.stringify({ type: 'sketch_stroke_broadcast', stroke: msg.stroke }));
-          }
-        }
-      }
-
-      else if (msg.type === 'send_chat') {
-        if (!currentRoomCode || !currentPlayerId) return;
-        const room = rooms.get(currentRoomCode);
-        if (!room) return;
-        const player = room.players.find(p => p.id === currentPlayerId);
-        if (!player) return;
-
-        const chatMsg = {
-          id: 'chat_' + Date.now() + Math.random().toString(36).substring(2, 5),
-          senderId: player.id,
-          senderName: player.name,
-          text: String(msg.text || '').substring(0, 200),
-          timestamp: Date.now()
+        room.match.activeQuestion = {
+          tile: { col, row },
+          question: q,
+          topic: t,
+          choosingTeam: room.match.currentTurn,
+          answeringTeam: room.match.currentTurn,
+          status: 'question_shown',
+          remainingSeconds: room.match.settings.timerSeconds,
+          timerRunning: true
         };
-        room.messages.push(chatMsg);
-        if (room.messages.length > 50) room.messages.shift();
+
+        // Clear existing timer interval if any
+        if (room.timerInterval) clearInterval(room.timerInterval);
+
+        // Start server synchronized clock
+        room.timerInterval = setInterval(() => {
+          if (room.match.activeQuestion && room.match.activeQuestion.timerRunning) {
+            room.match.activeQuestion.remainingSeconds -= 1;
+            if (room.match.activeQuestion.remainingSeconds <= 0) {
+              room.match.activeQuestion.remainingSeconds = 0;
+              room.match.activeQuestion.timerRunning = false;
+              if (room.timerInterval) clearInterval(room.timerInterval);
+            }
+            broadcastRoom(room);
+          }
+        }, 1000);
+
         broadcastRoom(room);
+        return;
+      }
+
+      // 5. Timer Controls (Host)
+      if (type === 'timer_action') {
+        if (!player.isHost) return;
+        const { action } = msg;
+        if (!room.match.activeQuestion) return;
+
+        if (action === 'pause') {
+          room.match.activeQuestion.timerRunning = false;
+        } else if (action === 'resume') {
+          room.match.activeQuestion.timerRunning = true;
+        } else if (action === 'add30') {
+          room.match.activeQuestion.remainingSeconds += 30;
+        }
+        broadcastRoom(room);
+        return;
+      }
+
+      // 5b. Swap / Alternate Question dynamically
+      if (type === 'swap_question') {
+        if (!player.isHost) return;
+        if (!room.match.activeQuestion) return;
+        const currentQ = room.match.activeQuestion.question;
+        const topicId = room.match.activeQuestion.topic.id;
+        const alternatives = questions.filter(q => q.topicId === topicId && q.id !== currentQ.id);
+        const pool = alternatives.filter(q => q.points === room.match.activeQuestion!.question.points);
+        const finalPool = pool.length > 0 ? pool : alternatives;
+        if (finalPool.length > 0) {
+          const nextQ = finalPool[Math.floor(Math.random() * finalPool.length)];
+          room.match.activeQuestion.question = nextQ;
+          room.match.activeQuestion.status = 'question_shown';
+          room.match.activeQuestion.remainingSeconds = room.match.settings.timerSeconds || 30;
+          room.match.activeQuestion.timerRunning = true;
+          broadcastRoom(room);
+        }
+        return;
+      }
+
+      // 6. Use Lifeline
+      if (type === 'use_lifeline') {
+        const { lifelineType } = msg as { lifelineType: LifelineType };
+        if (!room.match.activeQuestion) return;
+        const teamId = room.match.activeQuestion.answeringTeam;
+        const teamObj = room.match.teams[teamId];
+
+        if (!teamObj.lifelines[lifelineType]) {
+          return; // Already used
+        }
+
+        teamObj.lifelines[lifelineType] = false;
+
+        if (lifelineType === 'call_friend') {
+          room.match.activeQuestion.remainingSeconds += 30;
+        } else if (lifelineType === 'two_answers') {
+          room.match.activeQuestion.twoAnswersAttemptsLeft = 2;
+        } else if (lifelineType === 'the_trap') {
+          // Redirect question to opposite team
+          const oppTeam = teamId === 'team1' ? 'team2' : 'team1';
+          room.match.activeQuestion.answeringTeam = oppTeam;
+        }
+
+        room.match.activeQuestion.activeLifeline = {
+          type: lifelineType,
+          teamId,
+          detail: `استخدم ${teamObj.name} وسيلة: ${lifelineType}`
+        };
+
+        room.messages.push({
+          id: 'sys_' + Date.now(),
+          senderId: 'system',
+          senderName: 'جَمْر',
+          text: `⚡ أطلق ${teamObj.name} وسيلة مساعدة: ${lifelineType}`,
+          timestamp: Date.now(),
+          isSystem: true
+        });
+
+        broadcastRoom(room);
+        return;
+      }
+
+      // 7. Reveal Answer (Host)
+      if (type === 'reveal_answer') {
+        if (!player.isHost) return;
+        if (!room.match.activeQuestion) return;
+        room.match.activeQuestion.status = 'answer_revealed';
+        room.match.activeQuestion.timerRunning = false;
+        if (room.timerInterval) clearInterval(room.timerInterval);
+        broadcastRoom(room);
+        return;
+      }
+
+      // 8. Award Points / Complete Tile (Host)
+      if (type === 'award_points') {
+        if (!player.isHost) return;
+        const { resultTeam } = msg; // 'team1' | 'team2' | 'pass'
+        const active = room.match.activeQuestion;
+        if (!active) return;
+
+        const tile = room.match.board[active.tile.col][active.tile.row];
+        tile.isUsed = true;
+
+        if (resultTeam === 'team1' || resultTeam === 'team2') {
+          const awarded = tile.points;
+          const winningTeam = resultTeam as 'team1' | 'team2';
+          room.match.teams[winningTeam].score += awarded;
+          tile.answeredBy = winningTeam;
+          tile.pointsAwarded = awarded;
+
+          room.match.history.push({
+            id: 'h_' + Date.now(),
+            timestamp: Date.now(),
+            teamId: winningTeam,
+            action: 'إجابة صحيحة',
+            pointsDelta: awarded,
+            note: `فاز ${room.match.teams[winningTeam].name} بـ ${awarded} نقطة في موضوع ${active.topic.title}`
+          });
+        } else {
+          // Pass or wrong
+          tile.answeredBy = 'none';
+          if (room.match.settings.deductOnWrong) {
+            const answeringTeam = active.answeringTeam as 'team1' | 'team2';
+            room.match.teams[answeringTeam].score -= tile.points;
+            room.match.history.push({
+              id: 'h_' + Date.now(),
+              timestamp: Date.now(),
+              teamId: answeringTeam,
+              action: 'خصم نقاط',
+              pointsDelta: -tile.points,
+              note: `خصم ${tile.points} نقطة من ${room.match.teams[answeringTeam].name}`
+            });
+          }
+        }
+
+        // Switch active turn to opposite team
+        room.match.currentTurn = room.match.currentTurn === 'team1' ? 'team2' : 'team1';
+        room.match.activeQuestion = null;
+
+        // Check if all tiles are completed
+        const allUsed = room.match.board.every(col => col.every(tile => tile.isUsed));
+        if (allUsed) {
+          room.match.status = 'game_over';
+          const s1 = room.match.teams.team1.score;
+          const s2 = room.match.teams.team2.score;
+          if (s1 > s2) room.match.winner = 'team1';
+          else if (s2 > s1) room.match.winner = 'team2';
+          else room.match.winner = 'tie';
+        }
+
+        broadcastRoom(room);
+        return;
+      }
+
+      // 9. Rematch / Reset Board (Host)
+      if (type === 'rematch') {
+        if (!player.isHost) return;
+        const fresh = createInitialMatch(
+          room.match.topics,
+          room.match.teams.team1.name,
+          room.match.teams.team2.name
+        );
+        fresh.mode = 'online';
+        fresh.status = 'playing';
+        fresh.teams.team1.players = room.players.filter(p => p.team === 'team1').map(p => p.name);
+        fresh.teams.team2.players = room.players.filter(p => p.team === 'team2').map(p => p.name);
+        room.match = fresh;
+        broadcastRoom(room);
+        return;
+      }
+
+      // 10. Chat & Emoji Reactions
+      if (type === 'chat_message') {
+        const text = String(msg.text || '').trim().substring(0, 200);
+        if (text) {
+          room.messages.push({
+            id: 'c_' + Date.now() + Math.random().toString(36).substring(2, 5),
+            senderId: player.id,
+            senderName: player.name,
+            team: player.team,
+            text,
+            timestamp: Date.now()
+          });
+          if (room.messages.length > 60) room.messages.shift();
+          broadcastRoom(room);
+        }
+        return;
       }
     } catch (err) {
-      console.error('WebSocket message error:', err);
+      console.error('WebSocket parse error:', err);
     }
   });
 
@@ -672,7 +1186,7 @@ wss.on('connection', (ws: WebSocket) => {
           player.connected = false;
           player.ws = undefined;
 
-          // If host leaves, assign next active player
+          // Promote new host if host disconnects
           if (player.isHost) {
             const nextHost = room.players.find(p => p.id !== currentPlayerId && p.connected);
             if (nextHost) {
@@ -681,62 +1195,11 @@ wss.on('connection', (ws: WebSocket) => {
               room.hostId = nextHost.id;
             }
           }
-
           broadcastRoom(room);
-
-          // If all disconnected, schedule cleanup
-          const anyConnected = room.players.some(p => p.connected);
-          if (!anyConnected) {
-            room.cleanupTimeout = setTimeout(() => {
-              rooms.delete(currentRoomCode!);
-            }, 60000); // 1 minute grace period for reconnects
-          }
         }
       }
     }
   });
-});
-
-// REST Endpoints
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', name: 'جَمْر | JAMR API', timestamp: Date.now() });
-});
-
-app.get('/api/stats', (req, res) => {
-  res.json({
-    activeRooms: rooms.size,
-    totalGamesPlayed: totalGamesPlayedCount,
-    totalConnectionsEver,
-    questionsCount: QUESTIONS_BANK.length
-  });
-});
-
-app.get('/api/admin/rooms', (req, res) => {
-  const list = Array.from(rooms.values()).map(r => ({
-    code: r.code,
-    gameId: r.gameId,
-    playerCount: r.players.length,
-    status: r.status,
-    currentRound: r.currentRound,
-    players: r.players.map(p => ({ id: p.id, name: p.name, score: p.score, connected: p.connected }))
-  }));
-  res.json({ rooms: list });
-});
-
-app.post('/api/admin/rooms/:code/close', (req, res) => {
-  const code = req.params.code?.toUpperCase();
-  const room = rooms.get(code);
-  if (room) {
-    room.players.forEach(p => {
-      if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-        p.ws.send(JSON.stringify({ type: 'kicked', message: 'تم إغلاق الغرفة من قبل إدارة المنصة.' }));
-      }
-    });
-    rooms.delete(code);
-    res.json({ success: true, message: `تم إغلاق الغرفة ${code}` });
-  } else {
-    res.status(404).json({ error: 'الغرفة غير موجودة' });
-  }
 });
 
 // Dev vs Prod Vite Integration
@@ -747,7 +1210,10 @@ async function startServer() {
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -760,7 +1226,7 @@ async function startServer() {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🔥 [جَمْر | JAMR] الخادم يعمل الآن على المنفذ http://0.0.0.0:${PORT}`);
+    console.log(`🔥 [جَمْر | JAMR] خادم اللعبة يعمل بنجاح على http://0.0.0.0:${PORT}`);
   });
 }
 

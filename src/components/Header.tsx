@@ -1,165 +1,190 @@
 import React, { useState } from 'react';
-import { Flame, Volume2, VolumeX, ShieldCheck, Sparkles, FolderPlus, Trophy, Menu, X, Users, Compass } from 'lucide-react';
-import { sounds } from '../services/soundEffects';
-import { getUserProfile } from '../services/storage';
+import { Volume2, VolumeX, Shield, HelpCircle, Home, RotateCcw, User, Edit3, Flame, Sparkles } from 'lucide-react';
+import { sound } from '../services/soundFx';
 
 interface HeaderProps {
-  currentTab: 'home' | 'games' | 'packs' | 'profile' | 'admin';
-  setCurrentTab: (tab: 'home' | 'games' | 'packs' | 'profile' | 'admin') => void;
-  onOpenQuickPlay?: (mode: 'online' | 'offline') => void;
-  onOpenSubmitGame?: () => void;
+  currentView: string;
+  onNavigate: (view: string) => void;
+  onOpenHowToPlay: () => void;
+  onOpenAdmin: () => void;
+  soundEnabled: boolean;
+  onToggleSound: () => void;
+  onResetMatch?: () => void;
+  inActiveMatch?: boolean;
+  playerName?: string;
+  onChangePlayerName?: (name: string) => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ currentTab, setCurrentTab, onOpenSubmitGame }) => {
-  const [isMuted, setIsMuted] = useState(sounds.getMuted());
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const profile = getUserProfile();
+export const Header: React.FC<HeaderProps> = ({
+  currentView,
+  onNavigate,
+  onOpenHowToPlay,
+  onOpenAdmin,
+  soundEnabled,
+  onToggleSound,
+  onResetMatch,
+  inActiveMatch,
+  playerName = 'حمد',
+  onChangePlayerName
+}) => {
+  const [editingName, setEditingName] = useState(false);
+  const [tempName, setTempName] = useState(playerName);
 
-  const handleToggleSound = () => {
-    const next = sounds.toggleMute();
-    setIsMuted(next);
-    if (!next) sounds.playSpark();
+  const handleSaveName = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (tempName.trim()) {
+      onChangePlayerName?.(tempName.trim());
+      sound.playClick();
+    }
+    setEditingName(false);
   };
 
-  const navItems = [
-    { id: 'home', label: 'الرئيسية', icon: Flame },
-    { id: 'games', label: 'مكتبة الألعاب', icon: Compass },
-    { id: 'packs', label: 'اصنع حزمتك', icon: FolderPlus },
-    { id: 'profile', label: 'إنجازاتي', icon: Trophy },
-    { id: 'admin', label: 'الإدارة', icon: ShieldCheck },
-  ] as const;
-
   return (
-    <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#0c0817]/85 border-b border-purple-900/30 transition-all">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
-        {/* Brand Logo with Uploaded Image */}
+    <header className="sticky top-0 z-40 bg-[#0c0716]/90 backdrop-blur-xl border-b border-amber-500/20 shadow-2xl">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+        
+        {/* Right side (RTL Start): Logo and Brand */}
         <div 
-          onClick={() => { setCurrentTab('home'); sounds.playSpark(); }}
-          className="flex items-center gap-3.5 cursor-pointer group select-none"
+          onClick={() => {
+            sound.playClick();
+            onNavigate('home');
+          }}
+          className="flex items-center gap-3 cursor-pointer group select-none"
         >
-          <div className="relative w-12 h-12 rounded-2xl overflow-hidden bg-black/60 border-2 border-orange-500/50 flex items-center justify-center shadow-lg shadow-orange-500/20 group-hover:scale-105 transition-transform duration-300">
+          <div className="relative w-11 h-11 rounded-2xl overflow-hidden border border-amber-500/40 shadow-lg bg-black/40 flex items-center justify-center p-1 group-hover:scale-105 group-hover:border-amber-400 transition-all">
             <img 
               src="/assets/aistudio/IMG_3867_3e4a1eea.png" 
-              alt="جمر - العاب جماعية" 
-              className="w-full h-full object-cover scale-110"
+              alt="شعار جَمْر" 
+              className="w-full h-full object-contain filter drop-shadow-[0_2px_8px_rgba(245,158,11,0.5)]"
             />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-2xl font-black tracking-tight text-white font-sans">
-                جَمْر
-              </span>
-              <span className="text-[11px] font-bold text-orange-400/90 tracking-wider">
-                ألعاب جماعية
+              <span className="font-black text-xl text-white tracking-tight">جَمْر</span>
+              <span className="text-[10px] font-black text-amber-300 bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 rounded-full">
+                JAMR
               </span>
             </div>
-            <p className="text-[11px] text-purple-300/80 font-medium tracking-wide">
-              مع الأهل والأصدقاء · « ولّع جمعتكم »
+            <p className="text-[11px] font-bold text-amber-400/90 flex items-center gap-1">
+              <span>ولّع جمعتكم</span>
+              <Flame className="w-3 h-3 text-orange-500 fill-orange-500" />
             </p>
           </div>
         </div>
 
-        {/* Desktop Navigation */}
-        <nav className="hidden md:flex items-center gap-1.5 p-1 rounded-xl bg-purple-950/40 border border-purple-800/30">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setCurrentTab(item.id);
-                  sounds.playSpark();
-                }}
-                className={`flex items-center gap-2 px-3.5 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${
-                  isActive
-                    ? 'bg-gradient-to-r from-orange-500 to-amber-600 text-white shadow-md shadow-orange-500/20'
-                    : 'text-purple-200/80 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-purple-400'}`} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Header Right Actions */}
+        {/* Center: In-match quick indicator or Username Badge */}
         <div className="flex items-center gap-3">
-          {onOpenSubmitGame && (
+          {inActiveMatch ? (
+            <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-3.5 py-1.5 rounded-full text-xs font-black text-amber-300">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <span>مباراة جارية 🔥</span>
+            </div>
+          ) : (
+            /* Player Quick Name Badge (Free, Zero Password Needed) */
+            <div className="relative">
+              {editingName ? (
+                <form onSubmit={handleSaveName} className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    maxLength={15}
+                    value={tempName}
+                    onChange={(e) => setTempName(e.target.value)}
+                    placeholder="اسمك (مثل حمد)"
+                    className="w-28 sm:w-36 bg-black/70 border border-amber-500 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-hidden font-bold"
+                    autoFocus
+                  />
+                  <button type="submit" className="px-2 py-1 bg-amber-500 text-black text-xs font-bold rounded-xl cursor-pointer">
+                    حفظ
+                  </button>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTempName(playerName);
+                    setEditingName(true);
+                  }}
+                  className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/40 hover:bg-purple-900/60 border border-amber-500/30 hover:border-amber-500 text-xs text-amber-200 transition-all cursor-pointer group"
+                  title="تغيير اسم اللاعب"
+                >
+                  <User className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="font-bold">{playerName}</span>
+                  <Edit3 className="w-3 h-3 text-amber-400/60 group-hover:text-amber-300" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Left side (RTL End): Actions */}
+        <div className="flex items-center gap-2">
+          {inActiveMatch && onResetMatch && (
             <button
-              onClick={() => { sounds.playSpark(); onOpenSubmitGame(); }}
-              className="hidden lg:flex items-center gap-1.5 py-2 px-3 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/40 text-orange-400 font-bold text-xs transition-colors cursor-pointer"
+              onClick={() => {
+                sound.playClick();
+                onResetMatch();
+              }}
+              title="إعادة المباراة"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-200 hover:text-white bg-purple-900/30 hover:bg-purple-800/50 border border-purple-700/50 rounded-xl transition-colors cursor-pointer"
             >
-              <FolderPlus className="w-3.5 h-3.5" />
-              <span>أضف لعبتك</span>
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">إعادة</span>
             </button>
           )}
 
-          {/* Sound Mute Toggle */}
+          {currentView !== 'home' && (
+            <button
+              onClick={() => {
+                sound.playClick();
+                onNavigate('home');
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-purple-900/40 hover:bg-purple-800/60 border border-purple-700/50 rounded-xl transition-colors cursor-pointer"
+            >
+              <Home className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">الرئيسية</span>
+            </button>
+          )}
+
           <button
-            onClick={handleToggleSound}
-            title={isMuted ? 'تشغيل المؤثرات الصوتية' : 'كتم الصوت'}
-            className="w-10 h-10 rounded-xl bg-purple-900/30 hover:bg-purple-800/50 border border-purple-700/30 flex items-center justify-center text-purple-200 transition-colors"
+            onClick={() => {
+              sound.playClick();
+              onOpenHowToPlay();
+            }}
+            title="طريقة وقواعد اللعب"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-xl transition-colors cursor-pointer"
           >
-            {isMuted ? <VolumeX className="w-5 h-5 text-gray-400" /> : <Volume2 className="w-5 h-5 text-orange-400" />}
+            <HelpCircle className="w-4 h-4 text-amber-400" />
+            <span className="hidden md:inline">القواعد</span>
           </button>
 
-          {/* User Profile Mini Badge */}
-          <div 
-            onClick={() => { setCurrentTab('profile'); sounds.playSpark(); }}
-            className="hidden sm:flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-900/40 to-slate-900/80 border border-purple-700/40 hover:border-orange-500/50 cursor-pointer transition-all"
-          >
-            <div className="w-8 h-8 rounded-lg bg-orange-500/20 border border-orange-500/40 flex items-center justify-center text-lg">
-              {profile.avatar}
-            </div>
-            <div className="text-right">
-              <div className="text-xs font-bold text-white leading-tight">
-                {profile.username}
-              </div>
-              <div className="text-[10px] text-orange-400 font-medium">
-                مستوى {profile.level} · {profile.title}
-              </div>
-            </div>
-          </div>
-
-          {/* Mobile Menu Button */}
           <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden w-10 h-10 rounded-xl bg-purple-900/40 border border-purple-700/40 flex items-center justify-center text-purple-200"
+            onClick={() => {
+              onToggleSound();
+            }}
+            title={soundEnabled ? 'كتم المؤثرات الصوتية' : 'تشغيل المؤثرات الصوتية'}
+            className="p-2 text-slate-300 hover:text-amber-400 bg-purple-950/40 hover:bg-purple-900/60 border border-purple-800/40 rounded-xl transition-colors cursor-pointer"
           >
-            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            {soundEnabled ? (
+              <Volume2 className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <VolumeX className="w-4 h-4 text-slate-500" />
+            )}
+          </button>
+
+          <button
+            onClick={() => {
+              sound.playClick();
+              onOpenAdmin();
+            }}
+            title="لوحة الإدارة المحمية"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-amber-300 bg-gradient-to-r from-amber-600/30 to-orange-600/30 hover:from-amber-600/50 hover:to-orange-600/50 border border-amber-500/50 rounded-xl transition-all shadow-md cursor-pointer"
+          >
+            <Shield className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">الإدارة</span>
           </button>
         </div>
+
       </div>
-
-      {/* Mobile Drawer */}
-      {mobileMenuOpen && (
-        <div className="md:hidden bg-[#0e091b] border-b border-purple-900/50 px-4 py-4 space-y-2">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setCurrentTab(item.id);
-                  setMobileMenuOpen(false);
-                  sounds.playSpark();
-                }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold ${
-                  isActive
-                    ? 'bg-orange-500 text-white'
-                    : 'text-purple-200 hover:bg-purple-900/30'
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
     </header>
   );
 };

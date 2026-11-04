@@ -95,7 +95,7 @@ export const GamesGrid: React.FC<GamesGridProps> = ({ onSelectGame, onOpenRules,
       {/* Filter Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-purple-900/30 pb-3">
         <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-purple-950/40 border border-purple-800/30">
-          {CATEGORIES_LIST.map((cat) => {
+          {CATEGORIES_LIST.map((cat: any) => {
             const isActive = selectedCategory === cat.id;
             return (
               <button

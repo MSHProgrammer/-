@@ -7,14 +7,11 @@ import { sounds } from '../services/soundEffects';
 import { getUserProfile, AVATAR_OPTIONS } from '../services/storage';
 import confetti from 'canvas-confetti';
 
-// Import All Engines for Online Play
+// Import 4 Official Online Engines
 import { BarrahSalfaEngine } from './engines/BarrahSalfaEngine';
-import { TriviaEngine } from './engines/TriviaEngine';
-import { TabooEngine } from './engines/TabooEngine';
-import { WhoAmongUsEngine } from './engines/WhoAmongUsEngine';
-import { FactOrFictionEngine } from './engines/FactOrFictionEngine';
-import { SketchEngine } from './engines/SketchEngine';
-import { ThisOrThatEngine } from './engines/ThisOrThatEngine';
+import { MafiaNoHakamEngine } from './engines/MafiaNoHakamEngine';
+import { SoundMimicEngine } from './engines/SoundMimicEngine';
+import { BrokenTvEngine } from './engines/BrokenTvEngine';
 
 interface OnlineGameViewProps {
   initialAction?: 'create' | 'join';
@@ -67,7 +64,7 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
         setErrorMessage(msg.message);
         sounds.playWrong();
       } else if (msg.type === 'kicked') {
-        alert(msg.message || 'تم استبعادك من الغرفة');
+        setErrorMessage(msg.message || 'تم استبعادك من الغرفة');
         setIsInRoom(false);
         setRoom(null);
         sounds.playWrong();
@@ -139,6 +136,13 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
   const handleSendEmoji = (emoji: string) => {
     socket.send({ type: 'send_chat', text: emoji });
     sounds.playSpark();
+  };
+
+  const handleLeaveRoom = () => {
+    socket.leaveRoom();
+    setIsInRoom(false);
+    setRoom(null);
+    onExit();
   };
 
   const isHost = room?.hostId === myPlayerId;
@@ -539,85 +543,32 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
                 />
               )}
 
-              {room.gameId === 'trivia_spark' && (
-                <TriviaEngine
+              {room.gameId === 'mafia_nohakam' && (
+                <MafiaNoHakamEngine
                   mode="online"
                   players={room.players}
-                  currentRound={room.currentRound}
-                  totalRounds={room.totalRounds}
-                  onlineGameData={room.gameData}
-                  onlineStatus={room.status}
-                  isHost={isHost}
-                  onOnlineAnswer={(answer, timeRemaining) => socket.send({ type: 'submit_trivia_answer', answer, timeRemaining })}
-                  onNextRound={() => socket.send({ type: 'next_round' })}
+                  onlineRoomData={room.gameData}
+                  onOnlineAction={(action, payload) => socket.send({ type: 'mafia_action', action, payload })}
+                  onExit={handleLeaveRoom}
                 />
               )}
 
-              {room.gameId === 'taboo_words' && (
-                <TabooEngine
+              {room.gameId === 'sound_mimic' && (
+                <SoundMimicEngine
                   mode="online"
                   players={room.players}
-                  currentRound={room.currentRound}
-                  totalRounds={room.totalRounds}
-                  onlineGameData={room.gameData}
-                  onlineStatus={room.status}
-                  isHost={isHost}
-                  onScoreAction={(action) => socket.send({ type: 'taboo_score_action', action })}
-                  onNextRound={() => socket.send({ type: 'next_round' })}
+                  onlineRoomData={room.gameData}
+                  onOnlineScore={(score) => socket.send({ type: 'mimic_score', score })}
+                  onExit={handleLeaveRoom}
                 />
               )}
 
-              {room.gameId === 'who_among_us' && (
-                <WhoAmongUsEngine
+              {room.gameId === 'broken_tv' && (
+                <BrokenTvEngine
                   mode="online"
                   players={room.players}
-                  currentRound={room.currentRound}
-                  totalRounds={room.totalRounds}
-                  onlineGameData={room.gameData}
-                  onlineStatus={room.status}
-                  isHost={isHost}
-                  onOnlineVote={(targetPlayerId) => socket.send({ type: 'submit_who_among_us_vote', targetPlayerId })}
-                  onNextRound={() => socket.send({ type: 'next_round' })}
-                />
-              )}
-
-              {room.gameId === 'fact_or_fiction' && (
-                <FactOrFictionEngine
-                  mode="online"
-                  players={room.players}
-                  currentRound={room.currentRound}
-                  totalRounds={room.totalRounds}
-                  onlineGameData={room.gameData}
-                  onlineStatus={room.status}
-                  isHost={isHost}
-                  onOnlineAnswer={(answer, timeRemaining) => socket.send({ type: 'submit_trivia_answer', answer, timeRemaining })}
-                  onNextRound={() => socket.send({ type: 'next_round' })}
-                />
-              )}
-
-              {room.gameId === 'sketch_party' && (
-                <SketchEngine
-                  mode="online"
-                  players={room.players}
-                  currentRound={room.currentRound}
-                  totalRounds={room.totalRounds}
-                  onlineGameData={room.gameData}
-                  onlineStatus={room.status}
-                  isHost={isHost}
-                  onNextRound={() => socket.send({ type: 'next_round' })}
-                />
-              )}
-
-              {room.gameId === 'this_or_that' && (
-                <ThisOrThatEngine
-                  mode="online"
-                  players={room.players}
-                  currentRound={room.currentRound}
-                  totalRounds={room.totalRounds}
-                  onlineGameData={room.gameData}
-                  onlineStatus={room.status}
-                  isHost={isHost}
-                  onNextRound={() => socket.send({ type: 'next_round' })}
+                  onlineRoomData={room.gameData}
+                  onExit={handleLeaveRoom}
                 />
               )}
             </div>

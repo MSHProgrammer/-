@@ -10,8 +10,8 @@ const GAMES_CATALOG_KEY = 'jamr_games_catalog_v2';
 const SUBMISSIONS_KEY = 'jamr_submitted_games';
 const ONBOARDING_COMPLETED_KEY = 'jamr_onboarding_done';
 
-// Strict Admin Secret Passcode
-export const ADMIN_SECRET_PIN = '110012';
+// Strict Admin Secret Passcode requested by user
+export const ADMIN_SECRET_PIN = '1100321';
 
 export const INITIAL_ACHIEVEMENTS: Achievement[] = [
   {

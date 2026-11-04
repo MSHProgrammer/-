@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, EyeOff, ShieldAlert, Award, Clock, Users, ArrowRight, HelpCircle, Check, Flame } from 'lucide-react';
+import { Eye, EyeOff, ShieldAlert, Award, Clock, Users, ArrowRight, HelpCircle, Check, Flame, Trophy, AlertTriangle, Compass, CheckCircle2, XCircle } from 'lucide-react';
 import { Player, QuestionItem } from '../../types/game';
-import { sounds } from '../../services/soundEffects';
+import { sound } from '../../services/soundFx';
 import confetti from 'canvas-confetti';
+import { BARRAH_SALFA_TOPICS, BarrahSalfaTopic } from '../../data/barrahSalfaDefaultBank';
 
 interface BarrahSalfaProps {
   mode: 'online' | 'offline';
@@ -10,7 +11,6 @@ interface BarrahSalfaProps {
   currentRound: number;
   totalRounds: number;
   questionData?: QuestionItem;
-  // Online callbacks
   onOnlineVote?: (votedPlayerId: string) => void;
   onNextRound?: () => void;
   onlineGameData?: any;
@@ -30,34 +30,51 @@ export const BarrahSalfaEngine: React.FC<BarrahSalfaProps> = ({
   onlineStatus,
   isHost
 }) => {
-  // Offline State Machine
-  // 'reveal_roles' -> 'questioning' -> 'voting' -> 'odd_guess' -> 'round_summary'
-  const [offlinePhase, setOfflinePhase] = useState<'reveal_roles' | 'questioning' | 'voting' | 'odd_guess' | 'round_summary'>('reveal_roles');
-  const [offlinePlayerIndex, setOfflinePlayerIndex] = useState(0);
-  const [isRevealed, setIsRevealed] = useState(false);
-  const [oddPlayerId, setOddPlayerId] = useState<string>('');
-  const [timerSeconds, setTimerSeconds] = useState(90);
+  // Offline State Machine:
+  // 'reveal_cards' -> 'questions_stage' -> 'voting' -> 'final_chance' -> 'results'
+  const [phase, setPhase] = useState<'reveal_cards' | 'questions_stage' | 'voting' | 'final_chance' | 'results'>('reveal_cards');
+  const [activeTopic, setActiveTopic] = useState<BarrahSalfaTopic>(BARRAH_SALFA_TOPICS[0]);
+  const [spyMode, setSpyMode] = useState<'classic' | 'oblivious_spy'>('oblivious_spy'); // الجاسوس الغفلان
+  const [spyPlayerId, setSpyPlayerId] = useState<string>('');
+  
+  // Card reveal pass
+  const [revealIndex, setRevealIndex] = useState(0);
+  const [cardFlipped, setCardFlipped] = useState(false);
+
+  // Question stage
+  const [questionTurnIdx, setQuestionTurnIdx] = useState(0);
+
+  // Voting stage
+  const [timerSeconds, setTimerSeconds] = useState(45);
   const [timerRunning, setTimerRunning] = useState(false);
-  const [offlineVotes, setOfflineVotes] = useState<Record<string, string>>({});
+  const [votes, setVotes] = useState<Record<string, string>>({}); // voterId -> targetId
   const [accusedPlayerId, setAccusedPlayerId] = useState<string>('');
-  const [guessInput, setGuessInput] = useState('');
-  const [guessResult, setGuessResult] = useState<'success' | 'failed' | null>(null);
 
-  // Pick odd player on offline start
+  // Final chance guess (8 choices, 25s)
+  const [spyGuess, setSpyGuess] = useState<string | null>(null);
+  const [spyWonByGuess, setSpyWonByGuess] = useState<boolean | null>(null);
+
+  // Initialize round
   useEffect(() => {
-    if (mode === 'offline' && players.length > 0) {
-      const oddIdx = Math.floor(Math.random() * players.length);
-      setOddPlayerId(players[oddIdx].id);
-      setOfflinePhase('reveal_roles');
-      setOfflinePlayerIndex(0);
-      setIsRevealed(false);
-      setOfflineVotes({});
-      setGuessResult(null);
-      setGuessInput('');
-    }
-  }, [currentRound, mode]);
+    const randomTopic = BARRAH_SALFA_TOPICS[Math.floor(Math.random() * BARRAH_SALFA_TOPICS.length)] || BARRAH_SALFA_TOPICS[0];
+    setActiveTopic(randomTopic);
 
-  // Offline timer countdown
+    if (players.length > 0) {
+      const randomSpyIdx = Math.floor(Math.random() * players.length);
+      setSpyPlayerId(players[randomSpyIdx].id);
+    }
+
+    setPhase('reveal_cards');
+    setRevealIndex(0);
+    setCardFlipped(false);
+    setQuestionTurnIdx(0);
+    setVotes({});
+    setAccusedPlayerId('');
+    setSpyGuess(null);
+    setSpyWonByGuess(null);
+  }, [currentRound, players]);
+
+  // Timer countdown
   useEffect(() => {
     let interval: any = null;
     if (timerRunning && timerSeconds > 0) {
@@ -65,453 +82,372 @@ export const BarrahSalfaEngine: React.FC<BarrahSalfaProps> = ({
         setTimerSeconds(s => {
           if (s <= 1) {
             setTimerRunning(false);
-            sounds.playWrong();
+            if (phase === 'voting') {
+              tallyVotes();
+            } else if (phase === 'final_chance') {
+              setSpyWonByGuess(false);
+              setPhase('results');
+            }
             return 0;
           }
-          if (s <= 5) sounds.playTick();
+          if (s <= 5) sound.playTick(true);
           return s - 1;
         });
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [timerRunning, timerSeconds]);
+  }, [timerRunning, timerSeconds, phase]);
 
-  // Handle Offline Reveal Curtain
-  const handleNextPlayerReveal = () => {
-    sounds.playSpark();
-    setIsRevealed(false);
-    if (offlinePlayerIndex + 1 < players.length) {
-      setOfflinePlayerIndex(offlinePlayerIndex + 1);
-    } else {
-      // All players saw their role! Move to questioning
-      setOfflinePhase('questioning');
-      setTimerSeconds(90);
+  const handleStartQuestions = () => {
+    sound.playClick();
+    setPhase('questions_stage');
+  };
+
+  const handleStartVoting = () => {
+    sound.playClick();
+    setPhase('voting');
+    setTimerSeconds(45);
+    setTimerRunning(true);
+    setVotes({});
+  };
+
+  const handleVote = (voterId: string, targetId: string) => {
+    sound.playClick();
+    const newVotes = { ...votes, [voterId]: targetId };
+    setVotes(newVotes);
+
+    if (Object.keys(newVotes).length >= players.length) {
+      tallyVotes(newVotes);
+    }
+  };
+
+  const tallyVotes = (currentVotes = votes) => {
+    sound.playGong();
+    setTimerRunning(false);
+
+    const counts: Record<string, number> = {};
+    Object.values(currentVotes).forEach(tid => {
+      counts[tid] = (counts[tid] || 0) + 1;
+    });
+
+    let maxV = 0;
+    let target = '';
+    for (const [tid, cnt] of Object.entries(counts)) {
+      if (cnt > maxV) {
+        maxV = cnt;
+        target = tid;
+      }
+    }
+
+    setAccusedPlayerId(target);
+
+    // If the accused player is indeed the spy, trigger the Final Chance (الفرصة الأخيرة)!
+    if (target === spyPlayerId) {
+      setPhase('final_chance');
+      setTimerSeconds(25);
       setTimerRunning(true);
-      sounds.playCorrect();
+    } else {
+      // Spy was not caught -> Spy wins directly!
+      setPhase('results');
+      sound.playVictory();
     }
   };
 
-  // Handle Offline Voting
-  const handleVotePlayer = (voterId: string, targetId: string) => {
-    sounds.playSpark();
-    const updated = { ...offlineVotes, [voterId]: targetId };
-    setOfflineVotes(updated);
+  const handleSpyGuess = (choice: string) => {
+    if (spyGuess !== null) return;
+    setSpyGuess(choice);
+    setTimerRunning(false);
 
-    // If all players voted
-    if (Object.keys(updated).length === players.length) {
-      // Calculate accused
-      const counts: Record<string, number> = {};
-      Object.values(updated).forEach(tid => {
-        counts[tid] = (counts[tid] || 0) + 1;
-      });
-      let highestCount = 0;
-      let accused = '';
-      for (const [tid, c] of Object.entries(counts)) {
-        if (c > highestCount) {
-          highestCount = c;
-          accused = tid;
-        }
-      }
-      setAccusedPlayerId(accused);
-
-      // If accused is the odd one, give chance to guess!
-      if (accused === oddPlayerId) {
-        setOfflinePhase('odd_guess');
-        sounds.playReveal();
-      } else {
-        // Odd one escaped!
-        const oddPlayer = players.find(p => p.id === oddPlayerId);
-        if (oddPlayer) oddPlayer.score += 250;
-        setOfflinePhase('round_summary');
-        confetti({ particleCount: 60, spread: 70 });
-        sounds.playFanfare();
-      }
-    }
-  };
-
-  // Handle Odd One Word Guess
-  const handleOddGuessSubmit = () => {
-    sounds.playSpark();
-    const secretWord = questionData?.secretWord || 'صالون الحلاقة';
-    const isCorrect = guessInput.trim().toLowerCase() === secretWord.toLowerCase() ||
-                      guessInput.trim().includes(secretWord) ||
-                      secretWord.includes(guessInput.trim());
+    const isCorrect = choice === activeTopic.secretWord;
+    setSpyWonByGuess(isCorrect);
+    setPhase('results');
 
     if (isCorrect) {
-      setGuessResult('success');
-      const oddPlayer = players.find(p => p.id === oddPlayerId);
-      if (oddPlayer) oddPlayer.score += 200;
-      confetti({ particleCount: 80, spread: 80 });
-      sounds.playFanfare();
+      sound.playVictory();
+      confetti({ particleCount: 80, spread: 70 });
     } else {
-      setGuessResult('failed');
-      // Award voters who caught odd one
-      players.forEach(p => {
-        if (p.id !== oddPlayerId && offlineVotes[p.id] === oddPlayerId) {
-          p.score += 150;
-        }
-      });
-      sounds.playWrong();
+      sound.playWrong();
     }
-    setOfflinePhase('round_summary');
   };
 
-  // ONLINE MODE RENDER
-  if (mode === 'online') {
-    const isRoundResults = onlineStatus === 'round_results' || onlineStatus === 'game_over';
-    const myPlayer = players.find(p => p.id === sessionStorage.getItem('jamr_player_id'));
-    const isOdd = myPlayer?.secretRole === 'odd_one';
-
-    return (
-      <div className="max-w-3xl mx-auto space-y-6">
-        {/* Top Header Card */}
-        <div className="rounded-2xl bg-purple-950/40 border border-purple-800/40 p-4 text-center">
-          <div className="text-xs font-bold text-orange-400 mb-1">
-            جولة {currentRound} من {totalRounds} · برا السالفة
-          </div>
-          <h2 className="text-xl font-black text-white">
-            {isRoundResults ? 'نتائج الجولة والتصويت' : 'طور الأسئلة والتحقيق'}
-          </h2>
-        </div>
-
-        {/* Secret Card for Player */}
-        {!isRoundResults && (
-          <div className={`rounded-3xl p-6 sm:p-8 text-center border-2 transition-all shadow-2xl ${
-            isOdd
-              ? 'bg-gradient-to-b from-red-950/60 to-purple-950/80 border-red-500/60'
-              : 'bg-gradient-to-b from-purple-950/60 to-indigo-950/80 border-purple-500/60'
-          }`}>
-            <span className="text-xs font-semibold text-purple-300">تصنيف السالفة</span>
-            <div className="text-lg font-bold text-amber-400 mb-4">
-              {onlineGameData?.secretCategory || questionData?.secretCategory || 'أماكن عامة'}
-            </div>
-
-            {isOdd ? (
-              <div className="space-y-3 py-2">
-                <ShieldAlert className="w-16 h-16 text-red-500 mx-auto animate-bounce" />
-                <h3 className="text-2xl sm:text-3xl font-black text-red-400">
-                  أنت برّا السالفة! 🤫
-                </h3>
-                <p className="text-xs sm:text-sm text-red-200/80 max-w-md mx-auto leading-relaxed">
-                  ما تدري وش السالفة! اسمع أسئلة وإجابات ربعك بدقة، وسلّك بدون ما يشك فيك أحد.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3 py-2">
-                <Eye className="w-16 h-16 text-orange-400 mx-auto" />
-                <span className="text-xs text-purple-300 block">الكلمة السرية هي:</span>
-                <div className="text-3xl sm:text-4xl font-black text-white bg-black/40 py-3 px-6 rounded-2xl border border-orange-500/40 inline-block">
-                  {onlineGameData?.secretWord || questionData?.secretWord}
-                </div>
-                <p className="text-xs text-purple-200/70 max-w-md mx-auto">
-                  اسأل زملاءك أسئلة ذكية مرتبطة بالمكان لكشف من لا يعرف الكلمة!
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Voting Grid for Online */}
-        {!isRoundResults && (
-          <div className="rounded-2xl bg-purple-950/30 border border-purple-800/30 p-5">
-            <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-              <Users className="w-4 h-4 text-orange-400" />
-              <span>صوّت: مين شاك فيه إنه برا السالفة؟</span>
-            </h4>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {players.map(p => {
-                const isMe = p.id === myPlayer?.id;
-                return (
-                  <button
-                    key={p.id}
-                    disabled={isMe || myPlayer?.hasVoted}
-                    onClick={() => onOnlineVote && onOnlineVote(p.id)}
-                    className={`p-3 rounded-xl border flex items-center gap-2.5 transition-all text-right ${
-                      isMe 
-                        ? 'opacity-40 border-purple-800/20 bg-purple-950/20'
-                        : myPlayer?.hasVoted
-                          ? 'border-purple-800/40 bg-purple-900/20'
-                          : 'border-purple-700/50 bg-purple-900/40 hover:border-orange-500 hover:bg-orange-500/10 cursor-pointer'
-                    }`}
-                  >
-                    <span className="text-xl">{p.avatar}</span>
-                    <span className="text-xs font-bold text-white truncate">{p.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {myPlayer?.hasVoted && (
-              <p className="text-xs text-emerald-400 font-bold text-center mt-3">
-                ✓ تم تسجيل صوتك بنجاح! بانتظار بقية اللاعبين...
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Results Screen for Online */}
-        {isRoundResults && (
-          <div className="rounded-3xl bg-purple-950/40 border border-purple-800/40 p-6 text-center space-y-4">
-            <Award className="w-14 h-14 text-amber-400 mx-auto" />
-            <h3 className="text-2xl font-black text-white">
-              {onlineGameData?.caught ? 'تم كشف برا السالفة بنجاح! 🎯' : 'برا السالفة خدع الجميع وهرب بالنقاط! 🏃‍♂️'}
-            </h3>
-            <p className="text-sm text-purple-200">
-              برا السالفة كان: <span className="font-bold text-orange-400">{players.find(p => p.id === onlineGameData?.oddPlayerId)?.name}</span>
-            </p>
-            <div className="p-3 bg-black/40 rounded-xl inline-block text-xs text-purple-300">
-              الكلمة السرية كانت: <strong className="text-white text-sm">{onlineGameData?.secretWord}</strong>
-            </div>
-
-            {isHost && (
-              <div className="pt-4">
-                <button
-                  onClick={onNextRound}
-                  className="py-3 px-8 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer"
-                >
-                  الجولة التالية ➔
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ==================== OFFLINE MODE (SINGLE DEVICE) ====================
-  const currentPlayer = players[offlinePlayerIndex];
-  const isCurrentOdd = currentPlayer?.id === oddPlayerId;
-  const secretWord = questionData?.secretWord || 'صالون الحلاقة';
-  const secretCat = questionData?.secretCategory || 'أماكن عامة';
+  const spyPlayer = players.find(p => p.id === spyPlayerId) || players[0];
+  const accusedPlayer = players.find(p => p.id === accusedPlayerId);
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      {/* Round & Game Header */}
-      <div className="rounded-2xl bg-purple-950/40 border border-purple-800/40 p-4 flex items-center justify-between">
-        <div>
-          <span className="text-xs font-bold text-orange-400">جولة {currentRound} من {totalRounds}</span>
-          <h2 className="text-lg font-black text-white">برا السالفة (جهاز واحد)</h2>
-        </div>
-        <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-900/40 border border-purple-700/40 text-xs font-bold text-purple-200">
-          <Users className="w-3.5 h-3.5 text-orange-400" />
-          <span>{players.length} لاعبين</span>
-        </div>
-      </div>
-
-      {/* PHASE 1: PASS DEVICE & REVEAL ROLES */}
-      {offlinePhase === 'reveal_roles' && (
-        <div className="rounded-3xl bg-gradient-to-b from-[#191030] to-[#0d081b] border-2 border-purple-700/40 p-6 sm:p-8 text-center space-y-6 shadow-2xl">
-          <div className="w-16 h-16 rounded-2xl bg-orange-500/20 border border-orange-500/40 flex items-center justify-center text-3xl mx-auto shadow-md">
-            {currentPlayer?.avatar}
+    <div className="max-w-2xl mx-auto space-y-6 text-right pb-12">
+      {/* ================= 1. REVEAL CARDS (الكروت) ================= */}
+      {phase === 'reveal_cards' && players[revealIndex] && (
+        <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-b from-[#1b0a28] to-[#0d0416] border-2 border-orange-500/50 shadow-2xl text-center space-y-6">
+          <div className="flex items-center justify-between border-b border-purple-900/40 pb-3">
+            <span className="text-xs font-black text-amber-400">كروت السالفة ({revealIndex + 1} من {players.length})</span>
+            <div className="flex items-center gap-1.5 text-xs font-bold text-purple-300">
+              <Compass className="w-4 h-4 text-orange-400" />
+              <span>التصنيف: {activeTopic.category}</span>
+            </div>
           </div>
 
-          <div>
-            <span className="text-xs text-purple-400 font-medium">مرّر الجهاز إلى:</span>
-            <h3 className="text-2xl sm:text-3xl font-black text-white mt-1">
-              {currentPlayer?.name}
-            </h3>
-            <p className="text-xs text-purple-300/70 mt-1">
-              تأكد ألا ينظر أحد إلى الشاشة غيرك! 🤫
-            </p>
-          </div>
+          <h2 className="text-2xl font-black text-white">
+            دور اللاعب: <span className="text-orange-400">{players[revealIndex].name}</span>
+          </h2>
+          <p className="text-xs text-purple-200">مرر الجهاز وتأكد من سرية كرتك قبل اللمس</p>
 
-          {/* Curtain Toggle */}
-          {!isRevealed ? (
-            <button
-              onClick={() => {
-                sounds.playReveal();
-                setIsRevealed(true);
-              }}
-              className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white font-bold text-base shadow-xl shadow-orange-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Eye className="w-5 h-5" />
-              <span>اضغط هنا لكشف دورك السري</span>
-            </button>
-          ) : (
-            <div className="space-y-4 animate-in zoom-in-95 duration-200">
-              <div className={`p-6 rounded-2xl border-2 text-center ${
-                isCurrentOdd 
-                  ? 'bg-red-950/50 border-red-500/70' 
-                  : 'bg-purple-950/60 border-orange-500/60'
-              }`}>
-                <div className="text-xs text-purple-300 mb-1">تصنيف السالفة: {secretCat}</div>
-
-                {isCurrentOdd ? (
-                  <div className="space-y-2">
-                    <ShieldAlert className="w-12 h-12 text-red-500 mx-auto animate-bounce" />
-                    <div className="text-2xl font-black text-red-400">أنت برّا السالفة! 🤫</div>
-                    <p className="text-xs text-red-200/80">
-                      ما تدري وش الكلمة! اسمع أسئلة ربعك وسلّك بدون ما تنكشف.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <span className="text-xs text-purple-300">الكلمة السرية للجلسة:</span>
-                    <div className="text-3xl font-black text-white bg-black/40 py-2.5 px-4 rounded-xl border border-orange-500/40">
-                      {secretWord}
+          <div className="py-4">
+            {!cardFlipped ? (
+              <button
+                onClick={() => {
+                  sound.playTileSelect();
+                  setCardFlipped(true);
+                }}
+                className="w-56 h-72 mx-auto rounded-3xl bg-gradient-to-b from-purple-900/60 to-black border-2 border-orange-500/50 flex flex-col items-center justify-center gap-4 cursor-pointer hover:scale-105 transition-all shadow-xl"
+              >
+                <EyeOff className="w-12 h-12 text-orange-400 animate-pulse" />
+                <span className="text-sm font-black text-orange-200">المس الكرت لرؤية كلمتك</span>
+              </button>
+            ) : (
+              <div className="w-56 h-72 mx-auto rounded-3xl bg-gradient-to-b from-orange-950/60 via-[#1d092c] to-black border-2 border-orange-400 p-6 flex flex-col items-center justify-center gap-3 shadow-2xl animate-in zoom-in-95">
+                {players[revealIndex].id === spyPlayerId ? (
+                  spyMode === 'oblivious_spy' ? (
+                    // وضع المحترفين: الجاسوس الغفلان
+                    <div className="space-y-2">
+                      <span className="text-4xl">🎭</span>
+                      <div className="text-xs font-black text-amber-400">التصنيف: {activeTopic.category}</div>
+                      <div className="text-2xl font-black text-white">{activeTopic.trickySpyWord}</div>
+                      <p className="text-[10px] text-purple-300">أنت في السالفة! تذكر كلمتك وشارك بثقة.</p>
                     </div>
+                  ) : (
+                    // Classic Spy
+                    <div className="space-y-2">
+                      <span className="text-4xl">🕵️</span>
+                      <div className="text-xl font-black text-red-400">أنت برا السالفة!</div>
+                      <div className="text-xs font-bold text-amber-400">التصنيف: {activeTopic.category}</div>
+                      <p className="text-[10px] text-purple-300">سلك وما تنكشف! وحاول تستنتج الكلمة من الأسئلة.</p>
+                    </div>
+                  )
+                ) : (
+                  // Regular Player
+                  <div className="space-y-2">
+                    <span className="text-4xl">📜</span>
+                    <div className="text-xs font-black text-amber-400">التصنيف: {activeTopic.category}</div>
+                    <div className="text-2xl font-black text-emerald-300">{activeTopic.secretWord}</div>
+                    <p className="text-[10px] text-purple-300">أنت داخل السالفة! اسأل أسئلة ذكية ولا توضح زيادة.</p>
                   </div>
                 )}
               </div>
+            )}
+          </div>
 
-              <button
-                onClick={handleNextPlayerReveal}
-                className="w-full py-3.5 rounded-xl bg-purple-900 hover:bg-purple-800 text-white font-bold text-sm border border-purple-700/60 transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <EyeOff className="w-4 h-4" />
-                <span>إخفاء وتمرير للاعب التالي</span>
-              </button>
-            </div>
+          {cardFlipped && (
+            <button
+              onClick={() => {
+                sound.playClick();
+                setCardFlipped(false);
+                if (revealIndex + 1 < players.length) {
+                  setRevealIndex(i => i + 1);
+                } else {
+                  handleStartQuestions();
+                }
+              }}
+              className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-black text-sm shadow-lg shadow-orange-500/25 cursor-pointer"
+            >
+              {revealIndex + 1 < players.length ? 'إخفاء وتمرير للاعب التالي ➔' : 'بدء جولة الأسئلة 🎤'}
+            </button>
           )}
         </div>
       )}
 
-      {/* PHASE 2: QUESTIONING & TIMER */}
-      {offlinePhase === 'questioning' && (
-        <div className="rounded-3xl bg-purple-950/40 border border-purple-800/40 p-6 sm:p-8 text-center space-y-6">
-          <div className="flex items-center justify-center gap-2 text-orange-400">
-            <Clock className="w-6 h-6 animate-spin" />
-            <span className="text-4xl font-black font-mono tracking-wider">{timerSeconds}s</span>
+      {/* ================= 2. QUESTIONS STAGE (الأسئلة) ================= */}
+      {phase === 'questions_stage' && (
+        <div className="p-6 sm:p-8 rounded-3xl bg-[#170724] border-2 border-orange-500/50 shadow-2xl space-y-6 text-center">
+          <div className="flex items-center justify-between border-b border-purple-900/40 pb-3">
+            <span className="text-xs font-black text-orange-400">مرحلة طرح الأسئلة 🎤</span>
+            <span className="text-xs font-bold text-purple-300">التصنيف: {activeTopic.category}</span>
           </div>
 
-          <div className="space-y-2">
-            <h3 className="text-2xl font-black text-white">ابدأوا بالأسئلة والتحقيق! 🔥</h3>
-            <p className="text-sm text-purple-200/80 max-w-md mx-auto leading-relaxed">
-              كل لاعب يسأل شخصاً آخر سؤالاً متعلقاً بالكلمة. انتبهوا للإجابات المترددة والغريبة!
+          {/* Golden Rule Notice from Video 3 */}
+          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-right space-y-1">
+            <div className="text-xs font-black text-amber-400">✨ القاعدة الذهبية:</div>
+            <p className="text-xs text-purple-200/90 leading-relaxed">
+              ✅ جوابك يثبت إنك تعرف السالفة.. ولكن ❌ لا توضح زيادة عشان الجاسوس ما يعرف الكلمة!
             </p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-black/30 border border-purple-800/30 text-xs text-purple-300 space-y-1">
-            <div className="font-bold text-orange-400 mb-1">💡 نصيحة تكتيكية:</div>
-            <div>• لا تسأل سؤالاً مباشراً يكشف الكلمة لبرا السالفة!</div>
-            <div>• إذا كنت برا السالفة، راقب تعابير وجوه اللاعبين وردودهم.</div>
+          {/* Current Question Pair Direction */}
+          <div className="py-4 space-y-3">
+            <div className="text-sm font-bold text-purple-300">الدور الحالي في السؤال:</div>
+            <div className="p-4 rounded-2xl bg-black/50 border border-purple-700/40 flex items-center justify-around">
+              <div className="text-center">
+                <div className="text-xs text-orange-400 font-bold">السائل:</div>
+                <div className="text-lg font-black text-white">{players[questionTurnIdx % players.length]?.name}</div>
+              </div>
+              <ArrowRight className="w-6 h-6 text-orange-400 rotate-180" />
+              <div className="text-center">
+                <div className="text-xs text-amber-400 font-bold">المجيب:</div>
+                <div className="text-lg font-black text-white">{players[(questionTurnIdx + 1) % players.length]?.name}</div>
+              </div>
+            </div>
           </div>
 
-          <button
-            onClick={() => {
-              setTimerRunning(false);
-              setOfflinePhase('voting');
-              sounds.playSpark();
-            }}
-            className="w-full py-3.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer"
-          >
-            الانتقال للتصويت وكشف برا السالفة ➔
-          </button>
-        </div>
-      )}
-
-      {/* PHASE 3: VOTING */}
-      {offlinePhase === 'voting' && (
-        <div className="rounded-3xl bg-purple-950/40 border border-purple-800/40 p-6 sm:p-8 space-y-6">
-          <div className="text-center">
-            <h3 className="text-2xl font-black text-white">حان وقت التصويت! 🗳️</h3>
-            <p className="text-xs text-purple-200/70 mt-1">صوّتوا بالدور: مين تعتقدون إنه برا السالفة؟</p>
-          </div>
-
-          <div className="space-y-3">
-            {players.map(voter => {
-              const currentVoted = offlineVotes[voter.id];
-              return (
-                <div key={voter.id} className="p-3 rounded-2xl bg-purple-900/20 border border-purple-800/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">{voter.avatar}</span>
-                    <span className="text-xs font-bold text-white">{voter.name}</span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {players.filter(p => p.id !== voter.id).map(target => (
-                      <button
-                        key={target.id}
-                        onClick={() => handleVotePlayer(voter.id, target.id)}
-                        className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition-all ${
-                          currentVoted === target.id
-                            ? 'bg-orange-500 text-white'
-                            : 'bg-purple-950/60 text-purple-300 hover:text-white hover:bg-purple-800'
-                        }`}
-                      >
-                        {target.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* PHASE 4: ODD PLAYER GUESS */}
-      {offlinePhase === 'odd_guess' && (
-        <div className="rounded-3xl bg-gradient-to-b from-red-950/40 to-purple-950/60 border-2 border-red-500/60 p-6 sm:p-8 text-center space-y-5">
-          <ShieldAlert className="w-16 h-16 text-red-500 mx-auto" />
-          <h3 className="text-2xl font-black text-white">
-            كشفتموها! المتهم هو: {players.find(p => p.id === accusedPlayerId)?.name}
-          </h3>
-          <p className="text-xs text-purple-200">
-            لكن فرصة أخيرة لبرا السالفة للهروب بالنقاط: ما هي الكلمة السرية؟
-          </p>
-
-          <div className="max-w-md mx-auto space-y-3">
-            <input
-              type="text"
-              value={guessInput}
-              onChange={(e) => setGuessInput(e.target.value)}
-              placeholder="اكتب الكلمة السرية هنا..."
-              className="w-full bg-black/60 border border-orange-500/60 rounded-xl px-4 py-3 text-center text-white font-bold focus:outline-none focus:ring-2 focus:ring-orange-500"
-            />
+          <div className="flex gap-3 justify-center pt-2">
             <button
-              onClick={handleOddGuessSubmit}
-              disabled={!guessInput.trim()}
-              className="w-full py-3 rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold text-sm shadow-lg transition-all cursor-pointer"
+              onClick={() => {
+                sound.playClick();
+                setQuestionTurnIdx(q => q + 1);
+              }}
+              className="py-3 px-6 rounded-2xl bg-purple-900/60 hover:bg-purple-800 text-purple-200 font-bold text-xs border border-purple-700 cursor-pointer"
             >
-              تأكيد التخمين
+              السؤال التالي بالدور ➔
+            </button>
+            <button
+              onClick={handleStartVoting}
+              className="py-3 px-8 rounded-2xl bg-orange-500 hover:bg-orange-400 text-black font-black text-sm shadow-lg shadow-orange-500/30 cursor-pointer"
+            >
+              بدء التصويت (مين برا السالفة؟) 🗳️
             </button>
           </div>
         </div>
       )}
 
-      {/* PHASE 5: ROUND SUMMARY */}
-      {offlinePhase === 'round_summary' && (
-        <div className="rounded-3xl bg-purple-950/40 border border-purple-800/40 p-6 sm:p-8 text-center space-y-6">
-          <Award className="w-16 h-16 text-amber-400 mx-auto" />
-          <h3 className="text-2xl sm:text-3xl font-black text-white">
-            {accusedPlayerId === oddPlayerId && guessResult !== 'success'
-              ? 'كفو يا جماعة! كشفتوا برا السالفة وحصدتوا النقاط! 🎉'
-              : 'برا السالفة فاز بالنقاط وهرب بنجاح! 🏃‍♂️💨'}
-          </h3>
-
-          <div className="p-4 rounded-2xl bg-black/40 max-w-sm mx-auto border border-purple-800/40 space-y-2">
-            <div className="text-xs text-purple-300">
-              برا السالفة كان: <strong className="text-orange-400">{players.find(p => p.id === oddPlayerId)?.name}</strong>
-            </div>
-            <div className="text-xs text-purple-300">
-              الكلمة السرية كانت: <strong className="text-white">{secretWord}</strong>
+      {/* ================= 3. VOTING STAGE (التصويت 45 ثانية) ================= */}
+      {phase === 'voting' && (
+        <div className="p-6 sm:p-8 rounded-3xl bg-[#170724] border-2 border-orange-500/50 shadow-2xl space-y-6 text-center">
+          <div className="flex items-center justify-between border-b border-purple-900/40 pb-3">
+            <h3 className="text-lg font-black text-white">التصويت السري: مين برا السالفة؟</h3>
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-orange-500/20 text-orange-300 border border-orange-500/50 font-mono font-bold text-sm">
+              <Clock className="w-4 h-4" />
+              <span>{timerSeconds}s</span>
             </div>
           </div>
 
-          {/* Current Scoreboard Preview */}
-          <div className="max-w-md mx-auto space-y-2 text-right">
-            <div className="text-xs font-bold text-purple-300">جدول نقاط الجولة:</div>
-            {players.map(p => (
-              <div key={p.id} className="p-2.5 rounded-xl bg-purple-900/30 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span>{p.avatar}</span>
-                  <span className="text-xs font-bold text-white">{p.name}</span>
-                </div>
-                <span className="text-xs font-mono font-bold text-amber-400">{p.score} نقطة</span>
-              </div>
-            ))}
+          <p className="text-xs text-purple-300">صوتوا جميعاً على الشخص المشتبه به قبل انتهاء الـ 45 ثانية</p>
+
+          <div className="grid grid-cols-2 gap-3 max-w-md mx-auto text-right">
+            {players.map(p => {
+              const voteCount = Object.values(votes).filter(id => id === p.id).length;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => handleVote(players[0]?.id || 'v1', p.id)}
+                  className="p-3.5 rounded-2xl bg-gradient-to-b from-purple-900/40 to-black border border-purple-700/50 hover:border-orange-500 text-white font-bold text-xs flex items-center justify-between cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <span>{p.avatar}</span>
+                    <span>{p.name}</span>
+                  </div>
+                  {voteCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-orange-500 text-black font-black text-[10px]">
+                      {voteCount} أصوات
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <button
-            onClick={() => {
-              sounds.playSpark();
-              if (onNextRound) onNextRound();
-            }}
-            className="py-3 px-8 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-sm shadow-lg shadow-orange-500/25 transition-all cursor-pointer"
+            onClick={() => tallyVotes()}
+            className="w-full max-w-md py-3.5 rounded-2xl bg-orange-500 hover:bg-orange-400 text-black font-black text-sm shadow-lg shadow-orange-500/30 cursor-pointer"
           >
-            {currentRound >= totalRounds ? 'عرض النتائج النهائية والتتويج 🏆' : 'الجولة التالية ➔'}
+            حسم التصويت وإعلان النتيجة ➔
           </button>
+        </div>
+      )}
+
+      {/* ================= 4. FINAL CHANCE (الفرصة الأخيرة 8 كلمات 25 ثانية) ================= */}
+      {phase === 'final_chance' && (
+        <div className="p-6 sm:p-8 rounded-3xl bg-[#1b082c] border-2 border-amber-400 shadow-2xl space-y-6 text-center animate-in zoom-in-95">
+          <div className="inline-block px-4 py-1.5 rounded-full bg-amber-400/20 border border-amber-400 text-amber-300 text-xs font-black">
+            ⚡ الفرصة الأخيرة لبرا السالفة!
+          </div>
+
+          <h2 className="text-2xl font-black text-white">
+            انكشفت يا <span className="text-red-400">{spyPlayer.name}</span>!
+          </h2>
+          <p className="text-xs text-purple-200">
+            أمامك 25 ثانية و8 كلمات، إذا اخترت الكلمة الأصلية تفوز وتخطف الانتصار من الجميع!
+          </p>
+
+          <div className="flex justify-center">
+            <div className="px-4 py-1 rounded-2xl bg-black/60 border border-amber-500/50 text-amber-400 font-mono font-black text-xl flex items-center gap-2">
+              <Clock className="w-5 h-5" />
+              <span>{timerSeconds}s</span>
+            </div>
+          </div>
+
+          {/* 8 Word Choices Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-w-lg mx-auto">
+            {activeTopic.dummyOptions.map((word, idx) => (
+              <button
+                key={idx}
+                disabled={spyGuess !== null}
+                onClick={() => handleSpyGuess(word)}
+                className={`p-3.5 rounded-2xl border font-black text-xs transition-all cursor-pointer ${
+                  spyGuess === word
+                    ? word === activeTopic.secretWord
+                      ? 'bg-emerald-600 border-emerald-400 text-white'
+                      : 'bg-red-600 border-red-400 text-white'
+                    : 'bg-purple-950/60 border-purple-700/60 text-purple-100 hover:border-amber-400 hover:bg-purple-900/60'
+                }`}
+              >
+                {word}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ================= 5. RESULTS SCREEN ================= */}
+      {phase === 'results' && (
+        <div className="p-8 rounded-3xl bg-[#150522] border-2 border-yellow-400 shadow-2xl space-y-6 text-center animate-in fade-in">
+          <Trophy className="w-16 h-16 text-yellow-400 mx-auto animate-bounce" />
+          <h2 className="text-3xl font-black text-white">انتهت الجولة!</h2>
+
+          {spyWonByGuess ? (
+            <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/50 max-w-md mx-auto space-y-2">
+              <div className="text-xl font-black text-emerald-400">🎉 فاز برا السالفة ({spyPlayer.name})!</div>
+              <p className="text-xs text-purple-200">
+                رغم كشفه بالتصويت، استغل الفرصة الأخيرة وخمن الكلمة ({activeTopic.secretWord}) بشكل صحيح وخطف الفوز!
+              </p>
+            </div>
+          ) : accusedPlayerId === spyPlayerId ? (
+            <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/50 max-w-md mx-auto space-y-2">
+              <div className="text-xl font-black text-emerald-400">🎉 فاز أصحاب السالفة!</div>
+              <p className="text-xs text-purple-200">
+                كشفتم برا السالفة ({spyPlayer.name}) ولم يستطع تخمين الكلمة الأصلية ({activeTopic.secretWord}).
+              </p>
+            </div>
+          ) : (
+            <div className="p-4 rounded-2xl bg-red-950/60 border border-red-500/50 max-w-md mx-auto space-y-2">
+              <div className="text-xl font-black text-red-400">🎉 فاز برا السالفة بالخداع!</div>
+              <p className="text-xs text-purple-200">
+                صوتم بالخطأ على ({accusedPlayer?.name}) وهرب برا السالفة الحقيقي ({spyPlayer.name}) بالنقاط!
+              </p>
+            </div>
+          )}
+
+          <div className="p-4 rounded-2xl bg-black/40 border border-purple-800/40 max-w-md mx-auto text-xs space-y-1.5 text-right">
+            <div><span className="text-purple-400 font-bold">الكلمة الأصلية:</span> <span className="font-black text-white">{activeTopic.secretWord}</span></div>
+            <div><span className="text-purple-400 font-bold">برا السالفة الحقيقي:</span> <span className="font-black text-orange-400">{spyPlayer.name}</span></div>
+            {spyMode === 'oblivious_spy' && (
+              <div><span className="text-purple-400 font-bold">كلمة الجاسوس الغفلان المضللة:</span> <span className="font-black text-pink-400">{activeTopic.trickySpyWord}</span></div>
+            )}
+          </div>
+
+          <div className="flex gap-3 justify-center max-w-md mx-auto">
+            {onNextRound && (
+              <button
+                onClick={onNextRound}
+                className="flex-1 py-3.5 rounded-2xl bg-orange-500 hover:bg-orange-400 text-black font-black text-sm cursor-pointer shadow-lg shadow-orange-500/30"
+              >
+                الجولة التالية ➔
+              </button>
+            )}
+            <button
+              onClick={() => setPhase('reveal_cards')}
+              className="flex-1 py-3.5 rounded-2xl bg-purple-900/60 hover:bg-purple-800 text-purple-200 font-bold text-xs border border-purple-700 cursor-pointer"
+            >
+              إعادة جولة جديدة
+            </button>
+          </div>
         </div>
       )}
     </div>
