@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Mic, Volume2, Trophy, Clock, Star, Play, Award, RotateCcw, ArrowRight, Activity, Users, ThumbsUp, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Mic, MicOff, Volume2, VolumeX, Trophy, Clock, Star, Play, Award, RotateCcw, ArrowRight, Activity, Users, ThumbsUp, Sparkles, Radio, MessageSquare } from 'lucide-react';
 import { sound } from '../../services/soundFx';
 import confetti from 'canvas-confetti';
 import { Player } from '../../types/game';
@@ -37,6 +37,45 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
   const [ratings, setRatings] = useState<Record<string, number>>({});
   const [myRating, setMyRating] = useState(75);
   const [playerScores, setPlayerScores] = useState<Record<string, number>>({});
+
+  // Voice Chat Feature State
+  // Requirement: "اضف محادثة صوتية في تقليد الاصوات ولكن تنطفئ المحادثة عندما يقلد شخص الصوت وترجع بعد انتهائه"
+  const [myMicEnabled, setMyMicEnabled] = useState(true);
+  const [simulatedTalkingMap, setSimulatedTalkingMap] = useState<Record<string, boolean>>({});
+  const isVoiceMutedBySystem = stage === 'countdown' || stage === 'mimicking';
+  const prevMuteRef = useRef(isVoiceMutedBySystem);
+
+  // Monitor voice chat mute/unmute transition
+  useEffect(() => {
+    if (prevMuteRef.current !== isVoiceMutedBySystem) {
+      if (isVoiceMutedBySystem) {
+        sound.playWrong(); // subtle alert that voice chat is turned off
+      } else {
+        sound.playTileSelect(); // sound notification that voice chat is back on!
+      }
+      prevMuteRef.current = isVoiceMutedBySystem;
+    }
+  }, [isVoiceMutedBySystem]);
+
+  // Simulated voice chat activity when active (speech waves)
+  useEffect(() => {
+    if (isVoiceMutedBySystem) {
+      // All other players are muted
+      setSimulatedTalkingMap({});
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const map: Record<string, boolean> = {};
+      players.forEach(p => {
+        // Randomly simulate who is talking in the room when voice chat is open
+        map[p.id] = Math.random() > 0.45;
+      });
+      setSimulatedTalkingMap(map);
+    }, 1200);
+
+    return () => clearInterval(interval);
+  }, [isVoiceMutedBySystem, players]);
 
   // Pick random sound per turn
   useEffect(() => {
@@ -135,7 +174,8 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
   const activePlayer = players[activePlayerIdx] || players[0];
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 text-right pb-12">
+    <div className="max-w-3xl mx-auto space-y-5 text-right pb-14 font-sans select-none">
+      
       {/* Top Header */}
       <div className="p-4 rounded-3xl bg-gradient-to-r from-[#2a0c3a] via-[#160620] to-[#260934] border-2 border-pink-500/40 shadow-xl flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -152,8 +192,127 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
           onClick={onExit}
           className="text-xs text-purple-400 hover:text-white underline cursor-pointer"
         >
-          خروج
+          خروج للقائمة
         </button>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* VOICE CHAT BAR (محادثة صوتية ذكية تنطفئ أثناء التقليد وترجع بعده)         */}
+      {/* ========================================================================= */}
+      <div className={`p-4 rounded-3xl border-2 transition-all shadow-xl space-y-3 ${
+        isVoiceMutedBySystem
+          ? 'bg-gradient-to-r from-red-950/80 via-black to-red-950/80 border-red-500/60 ring-2 ring-red-500/30'
+          : 'bg-gradient-to-r from-[#170826] via-black to-[#170826] border-emerald-500/50'
+      }`}>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5">
+          {/* Status Message */}
+          <div className="flex items-center gap-2.5">
+            <div className={`w-9 h-9 rounded-2xl flex items-center justify-center text-base shrink-0 ${
+              isVoiceMutedBySystem
+                ? 'bg-red-600/30 text-red-400 border border-red-500/50 animate-pulse'
+                : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
+            }`}>
+              {isVoiceMutedBySystem ? <VolumeX className="w-5 h-5 text-red-400" /> : <Radio className="w-5 h-5 text-emerald-400 animate-pulse" />}
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black text-white">
+                  {isVoiceMutedBySystem
+                    ? '🔴 انطفأت المحادثة الصوتية للجميع تلقائياً (هدوء تام على المسرح)'
+                    : '🟢 المحادثة الصوتية نشطة ومفتوحة للجميع'}
+                </span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                  isVoiceMutedBySystem
+                    ? 'bg-red-600 text-white animate-pulse'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                }`}>
+                  {isVoiceMutedBySystem ? 'كتم عام' : 'مباشر 🎙️'}
+                </span>
+              </div>
+              <p className="text-[11px] text-purple-200/90 leading-tight mt-0.5">
+                {isVoiceMutedBySystem
+                  ? `المايكروفونات مقفلة حتى ينتهي ${activePlayer.name} من تقليد الصوت، وسترجع فوراً بعده!`
+                  : 'تحدثوا وتناقشوا بحرية وشاركوا الضحك أثناء الاستماع والتقييم!'}
+              </p>
+            </div>
+          </div>
+
+          {/* User Mic Toggle Button */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              disabled={isVoiceMutedBySystem}
+              onClick={() => {
+                sound.playClick();
+                setMyMicEnabled(!myMicEnabled);
+              }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-md ${
+                isVoiceMutedBySystem
+                  ? 'bg-red-950/60 text-red-300 border border-red-700/50 opacity-60 cursor-not-allowed'
+                  : myMicEnabled
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                  : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-600'
+              }`}
+            >
+              {isVoiceMutedBySystem ? (
+                <>
+                  <MicOff className="w-3.5 h-3.5" />
+                  <span>مكتوم بالنظام 🔇</span>
+                </>
+              ) : myMicEnabled ? (
+                <>
+                  <Mic className="w-3.5 h-3.5 text-white" />
+                  <span>مايكك شغال ✓</span>
+                </>
+              ) : (
+                <>
+                  <MicOff className="w-3.5 h-3.5" />
+                  <span>مايكك مكتوم</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Room Participants Voice Strip */}
+        <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-purple-900/40 scrollbar-none">
+          {players.map((p) => {
+            const isMimicker = p.id === activePlayer.id;
+            const isTalking = !isVoiceMutedBySystem && !!simulatedTalkingMap[p.id];
+
+            return (
+              <div
+                key={p.id}
+                className={`px-3 py-1.5 rounded-2xl border text-xs font-bold flex items-center gap-2 shrink-0 transition-all ${
+                  isMimicker && stage === 'mimicking'
+                    ? 'bg-pink-600/30 border-pink-400 text-pink-200 ring-2 ring-pink-400/50 scale-105 animate-pulse'
+                    : isVoiceMutedBySystem
+                    ? 'bg-black/40 border-purple-900/30 text-gray-500 opacity-60'
+                    : isTalking
+                    ? 'bg-emerald-950/40 border-emerald-500/60 text-emerald-200 ring-1 ring-emerald-400/30'
+                    : 'bg-black/30 border-purple-800/30 text-purple-200'
+                }`}
+              >
+                <span className="text-sm">{p.avatar || '👤'}</span>
+                <span className="truncate max-w-[90px]">{p.name}</span>
+
+                {/* Mic Status Icon */}
+                {isMimicker && stage === 'mimicking' ? (
+                  <span className="text-[10px] text-pink-300 font-mono flex items-center gap-0.5">
+                    <Mic className="w-3 h-3 text-pink-400 animate-bounce" />
+                    <span>يقلد الآن</span>
+                  </span>
+                ) : isVoiceMutedBySystem ? (
+                  <MicOff className="w-3 h-3 text-red-400" />
+                ) : isTalking ? (
+                  <Activity className="w-3 h-3 text-emerald-400 animate-pulse" />
+                ) : (
+                  <Mic className="w-3 h-3 text-purple-400 opacity-60" />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Main Game Stage */}
@@ -162,14 +321,14 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
           {/* Active Player Card */}
           <div className="flex items-center justify-between border-b border-purple-900/40 pb-4">
             <div className="flex items-center gap-2">
-              <span className="text-2xl">{activePlayer?.avatar || '🔥'}</span>
+              <span className="text-3xl">{activePlayer?.avatar || '🔥'}</span>
               <div className="text-right">
-                <div className="text-[10px] text-pink-400 font-bold">اللاعب على المسرح:</div>
-                <div className="text-base font-black text-white">{activePlayer?.name}</div>
+                <div className="text-xs text-pink-400 font-bold">اللاعب على المسرح:</div>
+                <div className="text-lg font-black text-white">{activePlayer?.name}</div>
               </div>
             </div>
 
-            <div className="text-xs font-black text-purple-300">
+            <div className="text-xs font-black text-purple-300 bg-purple-950/60 px-3 py-1 rounded-full border border-purple-800/50">
               الجولة {currentRound} · الدور {activePlayerIdx + 1} من {players.length}
             </div>
           </div>
@@ -179,24 +338,20 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
             <div className="inline-block px-3 py-1 rounded-full bg-pink-500/20 text-pink-300 border border-pink-500/40 text-xs font-bold">
               {currentSound.category}
             </div>
+
+            <div className="text-3xl font-black text-pink-300">{currentSound.audioClipText}</div>
             <h3 className="text-2xl font-black text-white">{currentSound.title}</h3>
-            <p className="text-xs text-purple-300 leading-relaxed max-w-md mx-auto">{currentSound.description}</p>
+            <p className="text-xs text-purple-200 leading-relaxed max-w-md mx-auto">{currentSound.description}</p>
 
-            <div className="text-lg font-mono font-black text-amber-400 bg-black/40 py-2.5 px-4 rounded-2xl border border-amber-500/30 inline-block">
-              "{currentSound.audioClipText}"
-            </div>
-
-            {/* Audio Wave Visualizer Simulation */}
-            <div className="flex items-center justify-center gap-1.5 h-12 py-2">
-              {[40, 75, 20, 90, 60, 100, 45, 80, 30, 95, 50, 85].map((h, i) => (
+            {/* Visual audio sound bars */}
+            <div className="flex justify-center items-center gap-1.5 py-2">
+              {[40, 70, 95, 60, 85, 45, 90, 75, 55, 80, 65, 95].map((h, i) => (
                 <div
                   key={i}
-                  className={`w-1.5 rounded-full transition-all duration-150 ${
-                    isPlayingDemo || stage === 'mimicking' ? 'bg-pink-500 animate-pulse' : 'bg-purple-900/60'
+                  style={{ height: isPlayingDemo ? `${h}%` : '20%' }}
+                  className={`w-1.5 sm:w-2 rounded-full transition-all duration-150 ${
+                    isPlayingDemo ? 'bg-pink-400 shadow-md shadow-pink-500/50' : 'bg-purple-900/50'
                   }`}
-                  style={{
-                    height: isPlayingDemo || stage === 'mimicking' ? `${h}%` : '20%'
-                  }}
                 />
               ))}
             </div>
@@ -229,26 +384,34 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
 
           {/* ================= STEP 2: COUNTDOWN ================= */}
           {stage === 'countdown' && (
-            <div className="py-6 space-y-2 animate-in zoom-in-95">
-              <div className="text-6xl font-black text-pink-400 animate-bounce">{countdownNum}</div>
-              <div className="text-xs text-purple-300 font-bold">استعد للتقليد الآن!</div>
+            <div className="py-6 space-y-3 animate-in zoom-in-95">
+              <div className="text-7xl font-black text-pink-400 animate-bounce">{countdownNum}</div>
+              <div className="text-sm text-red-300 font-black animate-pulse">
+                انطفأت المحادثة الصوتية.. هدوء للجميع! 🤫
+              </div>
             </div>
           )}
 
           {/* ================= STEP 3: MIMICKING NOW ================= */}
           {stage === 'mimicking' && (
-            <div className="py-6 space-y-3 animate-in fade-in">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-600 text-white font-black text-xs animate-pulse">
-                <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
-                <span>المايك مفتوح.. قلّد الصوت الآن!</span>
+            <div className="py-6 space-y-4 animate-in fade-in">
+              <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-red-600 text-white font-black text-sm shadow-xl shadow-red-600/50 animate-pulse">
+                <span className="w-3 h-3 rounded-full bg-white animate-ping" />
+                <span>المايك مفتوح لـ {activePlayer.name} فقط.. قلّد الصوت الآن!</span>
               </div>
-              <div className="text-4xl font-mono font-black text-white">{mimicTimer}s</div>
+              <div className="text-5xl font-mono font-black text-white">{mimicTimer}s</div>
+              <p className="text-xs text-red-300/80">المحادثة الصوتية مقفلة تلقائياً حتى ينتهي الوقت</p>
             </div>
           )}
 
           {/* ================= STEP 4: VOTING / RATING ================= */}
           {stage === 'voting' && (
             <div className="p-6 rounded-3xl bg-black/60 border border-purple-800/50 space-y-5 animate-in zoom-in-95">
+              <div className="p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-2">
+                <Radio className="w-4 h-4 text-emerald-400" />
+                <span>عادت المحادثة الصوتية للجميع! تناقشوا وقيموا أداء ({activePlayer.name}) 🗣️</span>
+              </div>
+
               <h4 className="text-base font-black text-white">قيّم أداء ({activePlayer.name}) من 0 إلى 100:</h4>
 
               <div className="space-y-2">
@@ -264,7 +427,7 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
                 />
               </div>
 
-              <div className="flex justify-center gap-2">
+              <div className="flex justify-center gap-2 flex-wrap">
                 {[
                   { val: 20, label: 'ما جابها 😂' },
                   { val: 50, label: 'نص ونص' },

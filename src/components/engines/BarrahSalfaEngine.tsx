@@ -358,18 +358,20 @@ export const BarrahSalfaEngine: React.FC<BarrahSalfaProps> = ({
             </div>
           </div>
 
-          {/* Section 2: Category Selector (20 Categories) */}
+          {/* Section 2: Category Selector (20 Categories - أسماء واضحة بالكامل) */}
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+              <label className="text-sm font-black text-amber-300 flex items-center gap-1.5">
                 <Compass className="w-4 h-4 text-orange-400" />
-                <span>اختر قسم السالفة (20 قسماً متاحاً):</span>
+                <span>اختر قسم السالفة (20 قسماً متاحاً بأسمائها كاملة):</span>
               </label>
-              <span className="text-[11px] text-purple-300">أو اختر عشوائي للحماس!</span>
+              <span className="text-xs text-purple-300 font-bold">
+                {selectedCategoryId === 'random' ? 'تم اختيار: عشوائي من الجميع 🎲' : `المحدد: ${categoriesList.find(c => c.id === selectedCategoryId)?.name}`}
+              </span>
             </div>
 
-            {/* Categories Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-64 overflow-y-auto p-1 rounded-2xl bg-black/30 border border-purple-900/40">
+            {/* Categories Grid - Clear, Spacious, No Truncation! */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-2 rounded-2xl bg-black/40 border border-purple-900/50 scrollbar-thin">
               {/* Random Choice */}
               <button
                 type="button"
@@ -377,45 +379,66 @@ export const BarrahSalfaEngine: React.FC<BarrahSalfaProps> = ({
                   sound.playClick();
                   setSelectedCategoryId('random');
                 }}
-                className={`p-3 rounded-2xl border text-right transition-all cursor-pointer flex items-center gap-2.5 ${
+                className={`p-3.5 rounded-2xl border-2 text-right transition-all cursor-pointer flex items-center gap-3 ${
                   selectedCategoryId === 'random'
-                    ? 'bg-gradient-to-r from-orange-600/80 to-amber-600/80 border-amber-400 text-white shadow-lg'
-                    : 'bg-black/40 border-purple-800/40 text-purple-200 hover:border-purple-600'
+                    ? 'bg-gradient-to-r from-orange-600 to-amber-600 border-amber-300 text-white shadow-xl ring-2 ring-amber-400/40'
+                    : 'bg-purple-950/40 border-purple-800/40 text-purple-200 hover:border-amber-400/60 hover:bg-purple-900/40'
                 }`}
               >
-                <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-lg shrink-0">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/20 flex items-center justify-center text-2xl shrink-0">
                   🎲
                 </div>
-                <div className="truncate">
-                  <div className="text-xs font-black truncate">عشوائي من الجميع</div>
-                  <div className="text-[9px] opacity-75">سالفة مفاجئة</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-black text-white leading-tight">عشوائي من جميع الأقسام</div>
+                  <div className="text-xs text-amber-200/90 mt-0.5">سالفة مفاجئة ومحيرة للمحترفين</div>
                 </div>
+                {selectedCategoryId === 'random' && (
+                  <Check className="w-5 h-5 text-white shrink-0" />
+                )}
               </button>
 
-              {/* 20 Categories */}
-              {categoriesList.map(cat => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => {
-                    sound.playClick();
-                    setSelectedCategoryId(cat.id);
-                  }}
-                  className={`p-2.5 rounded-2xl border text-right transition-all cursor-pointer flex items-center gap-2 ${
-                    selectedCategoryId === cat.id
-                      ? 'bg-gradient-to-r from-orange-600/80 to-amber-600/80 border-amber-400 text-white shadow-lg'
-                      : 'bg-black/40 border-purple-800/40 text-purple-200 hover:border-purple-600'
-                  }`}
-                >
-                  <div className="w-7 h-7 rounded-xl bg-purple-900/40 flex items-center justify-center text-base shrink-0">
-                    {cat.icon}
-                  </div>
-                  <div className="truncate">
-                    <div className="text-xs font-black truncate">{cat.name}</div>
-                    <div className="text-[9px] opacity-75 font-mono">{cat.words.length} سالفة</div>
-                  </div>
-                </button>
-              ))}
+              {/* 20 Categories with FULL, CLEAR NAMES */}
+              {categoriesList.map(cat => {
+                const isSelected = selectedCategoryId === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      sound.playClick();
+                      setSelectedCategoryId(cat.id);
+                    }}
+                    className={`p-3.5 rounded-2xl border-2 text-right transition-all cursor-pointer flex items-start gap-3 ${
+                      isSelected
+                        ? 'bg-gradient-to-r from-orange-600 to-amber-600 border-amber-300 text-white shadow-xl ring-2 ring-amber-400/40 scale-[1.01]'
+                        : 'bg-purple-950/40 border-purple-800/40 text-purple-200 hover:border-amber-400/60 hover:bg-purple-900/40'
+                    }`}
+                  >
+                    <div className="w-11 h-11 rounded-2xl bg-purple-900/60 flex items-center justify-center text-2xl shrink-0 mt-0.5">
+                      {cat.icon}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      {/* Full, Large, Clear Topic Title */}
+                      <h4 className="text-sm sm:text-base font-black text-white leading-snug">
+                        {cat.name}
+                      </h4>
+                      {cat.description && (
+                        <p className="text-xs text-purple-200/80 leading-relaxed mt-0.5 line-clamp-2">
+                          {cat.description}
+                        </p>
+                      )}
+                      <span className="text-[10px] font-mono text-amber-300 font-bold bg-black/40 px-2 py-0.5 rounded-md mt-1.5 inline-block">
+                        {cat.words.length} سالفة
+                      </span>
+                    </div>
+
+                    {isSelected && (
+                      <Check className="w-5 h-5 text-white shrink-0 mt-1" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

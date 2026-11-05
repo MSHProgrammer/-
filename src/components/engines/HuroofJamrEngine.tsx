@@ -327,9 +327,9 @@ export const HuroofJamrEngine: React.FC<HuroofJamrEngineProps> = ({ onExit }) =>
           </div>
 
           {/* ===================================================== */}
-          {/* HONEYCOMB HEXAGONAL GRID (5 COLUMNS X 5 ROWS - متلاصقة) */}
+          {/* HONEYCOMB HEXAGONAL GRID (5 COLUMNS X 5 ROWS - غير متداخلة) */}
           {/* ===================================================== */}
-          <div className="relative z-10 flex items-center justify-center -space-x-3.5 sm:-space-x-5 md:-space-x-6 max-w-full overflow-x-auto py-8 px-2">
+          <div className="relative z-10 flex items-center justify-center gap-2 sm:gap-3 md:gap-4 max-w-full overflow-x-auto py-8 px-3">
             {[0, 1, 2, 3, 4].map((colIdx) => {
               const isOffset = colIdx % 2 !== 0;
               const colCells = cells.filter(c => c.col === colIdx).sort((a, b) => a.row - b.row);
@@ -337,18 +337,18 @@ export const HuroofJamrEngine: React.FC<HuroofJamrEngineProps> = ({ onExit }) =>
               return (
                 <div 
                   key={colIdx} 
-                  className={`flex flex-col -space-y-3 sm:-space-y-4 md:-space-y-5 transition-all ${isOffset ? 'translate-y-7 sm:translate-y-9 md:translate-y-11' : ''}`}
+                  className={`flex flex-col gap-2 sm:gap-2.5 md:gap-3 transition-all ${isOffset ? 'translate-y-5 sm:translate-y-7 md:translate-y-8' : ''}`}
                 >
                   {colCells.map((cell) => {
                     const isClaimedBy1 = cell.owner === 1; // Green
                     const isClaimedBy2 = cell.owner === 2; // Orange
                     const isUnclaimed = cell.owner === null;
 
-                    let bgClass = 'bg-white text-[#4a1572] hover:scale-105 shadow-md border-2 border-purple-800';
+                    let bgClass = 'bg-white text-[#4a1572] hover:scale-105 shadow-lg border-2 border-purple-900';
                     if (isClaimedBy1) {
-                      bgClass = 'bg-[#22c55e] text-white shadow-lg shadow-green-700/50 border-2 border-[#15803d] ring-2 ring-white/40 scale-100';
+                      bgClass = 'bg-[#22c55e] text-white shadow-xl shadow-green-700/40 border-2 border-[#15803d] ring-2 ring-white/60';
                     } else if (isClaimedBy2) {
-                      bgClass = 'bg-[#f97316] text-white shadow-lg shadow-orange-700/50 border-2 border-[#c2410c] ring-2 ring-white/40 scale-100';
+                      bgClass = 'bg-[#f97316] text-white shadow-xl shadow-orange-700/40 border-2 border-[#c2410c] ring-2 ring-white/60';
                     }
 
                     return (
@@ -359,10 +359,10 @@ export const HuroofJamrEngine: React.FC<HuroofJamrEngineProps> = ({ onExit }) =>
                         style={{
                           clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)',
                         }}
-                        className={`w-16 h-18 sm:w-22 sm:h-24 md:w-24 md:h-28 flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-95 ${bgClass}`}
+                        className={`w-14 h-16 sm:w-20 sm:h-22 md:w-22 md:h-24 flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-95 select-none ${bgClass}`}
                       >
                         {/* Arabic Letter inside Hexagon */}
-                        <span className={`font-black text-2xl sm:text-3xl md:text-4xl select-none ${
+                        <span className={`font-black text-2xl sm:text-3xl md:text-4xl drop-shadow-xs ${
                           isUnclaimed ? 'text-[#521d84]' : 'text-white'
                         }`}>
                           {cell.letter}

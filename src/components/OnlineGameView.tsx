@@ -407,10 +407,10 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
                             <div className="text-xs font-bold text-white truncate">
                               {p.name} {isMe && '(أنت)'}
                             </div>
-                            <div className="flex items-center gap-1 mt-1">
-                              <span className={`w-2 h-2 rounded-full ${p.isReady ? 'bg-emerald-400' : 'bg-gray-500'}`} />
-                              <span className="text-[10px] text-purple-300">
-                                {p.isReady ? 'جاهز!' : 'ينتظر'}
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                              <span className="text-[10px] text-emerald-300 font-bold">
+                                داخل الغرفة
                               </span>
                             </div>
                           </div>
@@ -430,29 +430,23 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
                     })}
                   </div>
 
-                  {/* Ready Toggle Button */}
-                  <div className="pt-2 flex gap-3">
-                    <button
-                      onClick={() => socket.send({ type: 'toggle_ready' })}
-                      className={`flex-1 py-3 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                        myPlayer?.isReady
-                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md'
-                          : 'bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-700/40'
-                      }`}
-                    >
-                      {myPlayer?.isReady ? '✓ أنت جاهز للعب!' : 'اضغط للتجهيز (جاهز)'}
-                    </button>
-
+                  {/* Start Game Action (No Ready requirement) */}
+                  <div className="pt-2">
                     {/* Host Start Game Trigger */}
-                    {isHost && (
+                    {isHost ? (
                       <button
                         onClick={() => socket.send({ type: 'start_game' })}
                         disabled={room.players.length < activeGameInfo.minPlayers}
-                        className="flex-1 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 disabled:opacity-40 text-white font-black text-xs shadow-lg shadow-orange-500/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-red-600 hover:from-orange-600 hover:to-red-700 disabled:opacity-40 text-white font-black text-sm shadow-xl shadow-orange-500/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
                         <Play className="w-4 h-4 fill-white" />
-                        <span>بدء اللعبة للجميع 🔥</span>
+                        <span>بدء اللعبة للجميع الآن 🔥</span>
                       </button>
+                    ) : (
+                      <div className="text-center py-3 px-4 rounded-2xl bg-purple-950/60 border border-purple-800/40 text-xs text-purple-200 flex items-center justify-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                        <span>أنت داخل الغرفة! في انتظار قيام المضيف ببدء المباراة...</span>
+                      </div>
                     )}
                   </div>
                   {isHost && room.players.length < activeGameInfo.minPlayers && (
