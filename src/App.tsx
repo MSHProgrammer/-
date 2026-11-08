@@ -175,7 +175,7 @@ export default function App() {
       />
 
       {/* Main View Router */}
-      <main className="flex-1 pb-12">
+      <main className={`flex-1 ${currentView === 'offline_game' && selectedGame?.id === 'jamrain' ? 'pb-0' : 'pb-12'}`}>
         {currentView === 'home' && (
           <HomeScreen
             topics={topics}
@@ -204,6 +204,7 @@ export default function App() {
             initialAction={onlineAction}
             initialRoomCode={onlineRoomCode}
             initialGame={selectedGame}
+            defaultPlayerName={playerName}
             onExit={() => {
               setCurrentView('home');
               setOnlineRoomCode('');

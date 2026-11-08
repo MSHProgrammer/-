@@ -34,6 +34,8 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
   const [team1TopicIds, setTeam1TopicIds] = useState<string[]>(['t-animals', 't-science', 't-snacks']);
   const [team2TopicIds, setTeam2TopicIds] = useState<string[]>(['t-general', 't-worldcup', 't-choices']);
   const [activePickerTeam, setActivePickerTeam] = useState<0 | 1>(0);
+  const [activeSlotIdx, setActiveSlotIdx] = useState<0 | 1 | 2>(0);
+  const [stagedTopicId, setStagedTopicId] = useState<string | null>(null);
   const [showTopicPicker, setShowTopicPicker] = useState<boolean>(false);
   const [topicSearch, setTopicSearch] = useState<string>('');
   const [topicCategoryFilter, setTopicCategoryFilter] = useState<string>('all');
@@ -203,39 +205,68 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
     setSolvedTiles({});
   };
 
-  // Toggle topic selection for active team (up to 3)
-  const handleToggleTopic = (id: string) => {
-    sound.playClick();
+  // Step-by-step Slot Confirmation with "صح" (checkmark)
+  const handleConfirmTopicToSlot = (topicId: string, slotIdx: 0 | 1 | 2 = activeSlotIdx) => {
+    sound.playCorrect();
     if (activePickerTeam === 0) {
-      if (team1TopicIds.includes(id)) {
-        if (team1TopicIds.length <= 1) return;
-        setTeam1TopicIds(prev => prev.filter(tId => tId !== id));
+      setTeam2TopicIds(prev => prev.filter(id => id !== topicId));
+      setTeam1TopicIds(prev => {
+        const next = [...prev];
+        next[slotIdx] = topicId;
+        return next;
+      });
+      // Move to next slot
+      if (slotIdx === 0) {
+        setActiveSlotIdx(1);
+      } else if (slotIdx === 1) {
+        setActiveSlotIdx(2);
       } else {
-        if (team2TopicIds.includes(id)) {
-          // If already chosen by team 2, swap out
-          setTeam2TopicIds(prev => prev.filter(tId => tId !== id));
-        }
-        if (team1TopicIds.length >= 3) {
-          setTeam1TopicIds(prev => [...prev.slice(0, 2), id]);
-        } else {
-          setTeam1TopicIds(prev => [...prev, id]);
+        // Slot 3 filled! Auto switch to Team 2 if they have unpicked slots
+        if (team2TopicIds.filter(Boolean).length < 3) {
+          setActivePickerTeam(1);
+          setActiveSlotIdx(0);
         }
       }
     } else {
-      if (team2TopicIds.includes(id)) {
-        if (team2TopicIds.length <= 1) return;
-        setTeam2TopicIds(prev => prev.filter(tId => tId !== id));
-      } else {
-        if (team1TopicIds.includes(id)) {
-          setTeam1TopicIds(prev => prev.filter(tId => tId !== id));
-        }
-        if (team2TopicIds.length >= 3) {
-          setTeam2TopicIds(prev => [...prev.slice(0, 2), id]);
-        } else {
-          setTeam2TopicIds(prev => [...prev, id]);
-        }
+      setTeam1TopicIds(prev => prev.filter(id => id !== topicId));
+      setTeam2TopicIds(prev => {
+        const next = [...prev];
+        next[slotIdx] = topicId;
+        return next;
+      });
+      // Move to next slot
+      if (slotIdx === 0) {
+        setActiveSlotIdx(1);
+      } else if (slotIdx === 1) {
+        setActiveSlotIdx(2);
       }
     }
+    setStagedTopicId(null);
+  };
+
+  // Remove topic from specific slot
+  const handleRemoveSlotTopic = (teamIdx: 0 | 1, slotIdx: number) => {
+    sound.playClick();
+    if (teamIdx === 0) {
+      setTeam1TopicIds(prev => prev.filter((_, i) => i !== slotIdx));
+      setActivePickerTeam(0);
+      setActiveSlotIdx(slotIdx as 0 | 1 | 2);
+    } else {
+      setTeam2TopicIds(prev => prev.filter((_, i) => i !== slotIdx));
+      setActivePickerTeam(1);
+      setActiveSlotIdx(slotIdx as 0 | 1 | 2);
+    }
+  };
+
+  // Toggle or stage topic selection
+  const handleToggleTopic = (id: string) => {
+    sound.playClick();
+    if (stagedTopicId === id) {
+      // If already staged, pressing again confirms it directly!
+      handleConfirmTopicToSlot(id);
+      return;
+    }
+    setStagedTopicId(id);
   };
 
   // Save renamed team
@@ -268,39 +299,437 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
   // 1. DEDICATED TOPIC SELECTION SCREEN (FIRST STEP BEFORE BOARD)
   // =========================================================================
   if (gameState === 'pick_topics') {
+    const stagedTopicObj = stagedTopicId ? ALL_100_JAMRAIN_TOPICS.find(t => t.id === stagedTopicId) : null;
+    const currentTeamName = activePickerTeam === 0 ? teams[0].name : teams[1].name;
+    const slotNames = ['الخانة الأولى (1)', 'الخانة الثانية (2)', 'الخانة الثالثة (3)'];
+
     return (
-      <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4 select-none font-sans text-white text-right space-y-6 animate-in fade-in">
-        {/* Top Header */}
-        <div className="p-4 sm:p-6 rounded-3xl bg-gradient-to-r from-[#240e42] via-[#16062a] to-[#2b0c38] border-2 border-amber-500/50 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onExit}
-              className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center transition-all cursor-pointer"
-              title="الخروج للقائمة الرئيسية"
-            >
-              ✕
-            </button>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
-                <span>اختيار مواضيع جَمْرَيْن (100 موضوع)</span>
-                <span className="text-xs bg-amber-500 text-black px-2.5 py-0.5 rounded-full font-black">
-                  الخطوة الأولى
-                </span>
-              </h2>
-              <p className="text-xs text-amber-300 font-bold mt-1">
-                يختار كل فريق 3 مواضيع (المجموع 6 مواضيع على اللوحة) للتنافس عليها!
-              </p>
+      <div className="w-full min-h-screen px-3 sm:px-8 py-5 select-none font-sans text-white text-right space-y-6 animate-in fade-in bg-[#08020f] flex flex-col justify-between">
+        <div className="space-y-6 w-full max-w-7xl mx-auto">
+          {/* Top Header */}
+          <div className="p-4 sm:p-6 rounded-3xl bg-gradient-to-r from-[#240e42] via-[#16062a] to-[#2b0c38] border-2 border-amber-500/50 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onExit}
+                className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center transition-all cursor-pointer"
+                title="الخروج للقائمة الرئيسية"
+              >
+                ✕
+              </button>
+              <div>
+                <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
+                  <span>اختيار مواضيع جَمْرَيْن (100 موضوع)</span>
+                  <span className="text-xs bg-amber-500 text-black px-2.5 py-0.5 rounded-full font-black">
+                    الخطوة الأولى
+                  </span>
+                </h2>
+                <p className="text-xs text-amber-300 font-bold mt-1">
+                  اختر لكل فريق 3 مواضيع بالترتيب (اضغط الموضوع ثم اضغط زر "صح ✓" للانتقال للخانة التالية)!
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                onClick={handlePickRandom3ForEach}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600/60 font-black text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md"
+              >
+                <Shuffle className="w-4 h-4 text-amber-400" />
+                <span>اختيار عشوائي للطرفين 🎲</span>
+              </button>
+
+              <button
+                disabled={team1TopicIds.length !== 3 || team2TopicIds.length !== 3}
+                onClick={() => {
+                  sound.playVictory();
+                  setGameState('board');
+                }}
+                className={`flex-1 sm:flex-none px-6 py-2.5 rounded-xl font-black text-xs shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                  team1TopicIds.length === 3 && team2TopicIds.length === 3
+                    ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 text-black hover:scale-105 shadow-orange-500/30 animate-pulse'
+                    : 'bg-gray-800 text-gray-500 opacity-50 cursor-not-allowed'
+                }`}
+              >
+                <Flame className="w-4 h-4 fill-current" />
+                <span>بدء اللعبة بالمواضيع الـ 6 🔥</span>
+              </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              onClick={handlePickRandom3ForEach}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600/60 font-black text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md"
+          {/* Active Slot Status Announcement Banner */}
+          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-purple-950 via-[#1d0b30] to-purple-950 border border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <span className="w-3 h-3 rounded-full bg-emerald-400 animate-ping" />
+              <span className="font-bold text-purple-200">الدور الحالي في الاختيار:</span>
+              <span className="font-black text-white px-2 py-0.5 rounded-lg bg-purple-800/60 border border-purple-600/50">
+                {currentTeamName}
+              </span>
+              <span className="text-amber-300 font-bold">➔</span>
+              <span className="font-black text-emerald-300 bg-emerald-950/80 px-2.5 py-0.5 rounded-lg border border-emerald-500/50 flex items-center gap-1">
+                <span>يتم الآن تحديد:</span>
+                <span className="underline">{slotNames[activeSlotIdx]}</span>
+              </span>
+            </div>
+            <div className="text-[11px] text-purple-300 font-medium">
+              اختر أي موضوع من الأسفل ثم اضغط زر <strong className="text-emerald-400 font-black">"صح ✓"</strong> للانتقال تلقائياً للخانة التالية!
+            </div>
+          </div>
+
+          {/* Selected Topics Slots for Both Teams */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Team 1 Slots */}
+            <div
+              className={`p-4 sm:p-5 rounded-3xl border-2 transition-all ${
+                activePickerTeam === 0
+                  ? 'bg-gradient-to-b from-[#2e144a] to-[#160829] border-amber-400 ring-2 ring-amber-400/40 shadow-2xl'
+                  : 'bg-[#120520] border-purple-900/50 opacity-85 hover:opacity-100'
+              }`}
             >
-              <Shuffle className="w-4 h-4 text-amber-400" />
-              <span>اختيار عشوائي للطرفين 🎲</span>
-            </button>
+              <div className="flex items-center justify-between mb-3 border-b border-purple-900/40 pb-2">
+                <div 
+                  onClick={() => { sound.playClick(); setActivePickerTeam(0); }}
+                  className="flex items-center gap-2 cursor-pointer"
+                >
+                  <span className="w-3.5 h-3.5 rounded-full bg-amber-400" />
+                  <span className="text-sm font-black text-white">{teams[0].name}</span>
+                  <span className="text-[10px] text-amber-300 font-bold bg-amber-500/20 px-2 py-0.5 rounded-full">
+                    {team1TopicIds.length} من 3
+                  </span>
+                  {activePickerTeam === 0 && (
+                    <span className="text-[10px] text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded-full font-bold">
+                      الفريق النشط
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.playClick();
+                    setIsRenamingTeam(0);
+                    setEditTeamName(teams[0].name);
+                  }}
+                  className="text-[11px] text-purple-300 hover:text-white flex items-center gap-1 cursor-pointer"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>تعديل الاسم</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                {[0, 1, 2].map((idx) => {
+                  const topicId = team1TopicIds[idx];
+                  const topic = ALL_100_JAMRAIN_TOPICS.find(t => t.id === topicId);
+                  const isCurrentTarget = activePickerTeam === 0 && activeSlotIdx === idx;
+
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        sound.playClick();
+                        setActivePickerTeam(0);
+                        setActiveSlotIdx(idx as 0 | 1 | 2);
+                      }}
+                      className={`p-3 rounded-2xl border-2 text-center transition-all flex flex-col items-center justify-between min-h-[110px] relative cursor-pointer ${
+                        isCurrentTarget
+                          ? 'border-emerald-400 bg-emerald-950/50 ring-4 ring-emerald-400/40 shadow-xl scale-[1.03]'
+                          : topic
+                          ? 'bg-amber-500/20 border-amber-400/80 text-white shadow-inner hover:scale-[1.01]'
+                          : 'bg-black/40 border-dashed border-purple-800/60 text-purple-400 hover:border-purple-600'
+                      }`}
+                    >
+                      {/* Slot Header Label */}
+                      <div className="text-[10px] font-black w-full flex items-center justify-between">
+                        <span className={isCurrentTarget ? 'text-emerald-300' : 'text-purple-300'}>
+                          {slotNames[idx]}
+                        </span>
+                        {isCurrentTarget && (
+                          <span className="text-[9px] bg-emerald-500 text-black px-1.5 py-0.2 rounded-full font-black">
+                            الهدف 🎯
+                          </span>
+                        )}
+                      </div>
+
+                      {topic ? (
+                        <>
+                          <div className="my-1">
+                            <span className="text-2xl block mb-0.5">{topic.icon}</span>
+                            <span className="text-xs font-black text-amber-200 line-clamp-2 leading-tight">
+                              {topic.title}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveSlotTopic(0, idx);
+                            }}
+                            className="w-full mt-1 py-0.5 rounded-lg bg-black/50 hover:bg-red-600 text-purple-300 hover:text-white text-[10px] font-bold transition-colors cursor-pointer"
+                            title="إزالة أو تغيير"
+                          >
+                            ✕ تغيير
+                          </button>
+                        </>
+                      ) : (
+                        <div className="my-auto py-2">
+                          <span className="text-[11px] font-black block text-purple-300/80">
+                            + اضغط للاختيار
+                          </span>
+                          <span className="text-[9px] text-purple-400/60 block mt-0.5">
+                            ثم اختر موضوع واضغط صح
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Team 2 Slots */}
+            <div
+              className={`p-4 sm:p-5 rounded-3xl border-2 transition-all ${
+                activePickerTeam === 1
+                  ? 'bg-gradient-to-b from-[#2e144a] to-[#160829] border-purple-400 ring-2 ring-purple-400/40 shadow-2xl'
+                  : 'bg-[#120520] border-purple-900/50 opacity-85 hover:opacity-100'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-3 border-b border-purple-900/40 pb-2">
+                <div 
+                  onClick={() => { sound.playClick(); setActivePickerTeam(1); }}
+                  className="flex items-center gap-2 cursor-pointer"
+                >
+                  <span className="w-3.5 h-3.5 rounded-full bg-purple-400" />
+                  <span className="text-sm font-black text-white">{teams[1].name}</span>
+                  <span className="text-[10px] text-purple-300 font-bold bg-purple-500/20 px-2 py-0.5 rounded-full">
+                    {team2TopicIds.length} من 3
+                  </span>
+                  {activePickerTeam === 1 && (
+                    <span className="text-[10px] text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded-full font-bold">
+                      الفريق النشط
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.playClick();
+                    setIsRenamingTeam(1);
+                    setEditTeamName(teams[1].name);
+                  }}
+                  className="text-[11px] text-purple-300 hover:text-white flex items-center gap-1 cursor-pointer"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>تعديل الاسم</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                {[0, 1, 2].map((idx) => {
+                  const topicId = team2TopicIds[idx];
+                  const topic = ALL_100_JAMRAIN_TOPICS.find(t => t.id === topicId);
+                  const isCurrentTarget = activePickerTeam === 1 && activeSlotIdx === idx;
+
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        sound.playClick();
+                        setActivePickerTeam(1);
+                        setActiveSlotIdx(idx as 0 | 1 | 2);
+                      }}
+                      className={`p-3 rounded-2xl border-2 text-center transition-all flex flex-col items-center justify-between min-h-[110px] relative cursor-pointer ${
+                        isCurrentTarget
+                          ? 'border-emerald-400 bg-emerald-950/50 ring-4 ring-emerald-400/40 shadow-xl scale-[1.03]'
+                          : topic
+                          ? 'bg-purple-600/25 border-purple-400/80 text-white shadow-inner hover:scale-[1.01]'
+                          : 'bg-black/40 border-dashed border-purple-800/60 text-purple-400 hover:border-purple-600'
+                      }`}
+                    >
+                      {/* Slot Header Label */}
+                      <div className="text-[10px] font-black w-full flex items-center justify-between">
+                        <span className={isCurrentTarget ? 'text-emerald-300' : 'text-purple-300'}>
+                          {slotNames[idx]}
+                        </span>
+                        {isCurrentTarget && (
+                          <span className="text-[9px] bg-emerald-500 text-black px-1.5 py-0.2 rounded-full font-black">
+                            الهدف 🎯
+                          </span>
+                        )}
+                      </div>
+
+                      {topic ? (
+                        <>
+                          <div className="my-1">
+                            <span className="text-2xl block mb-0.5">{topic.icon}</span>
+                            <span className="text-xs font-black text-purple-200 line-clamp-2 leading-tight">
+                              {topic.title}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveSlotTopic(1, idx);
+                            }}
+                            className="w-full mt-1 py-0.5 rounded-lg bg-black/50 hover:bg-red-600 text-purple-300 hover:text-white text-[10px] font-bold transition-colors cursor-pointer"
+                            title="إزالة أو تغيير"
+                          >
+                            ✕ تغيير
+                          </button>
+                        </>
+                      ) : (
+                        <div className="my-auto py-2">
+                          <span className="text-[11px] font-black block text-purple-300/80">
+                            + اضغط للاختيار
+                          </span>
+                          <span className="text-[9px] text-purple-400/60 block mt-0.5">
+                            ثم اختر موضوع واضغط صح
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Categories Bar & Search Filter */}
+          <div className="p-4 rounded-3xl bg-[#120520] border border-purple-900/50 space-y-3 shadow-xl">
+            {/* Category Tabs */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
+              {[
+                { id: 'all', label: '📌 جميع الـ 100 موضوع' },
+                { id: 'sports', label: '⚽ رياضة وكورة' },
+                { id: 'cinema', label: '🎬 سينما وتلفزيون' },
+                { id: 'science', label: '🔬 علوم واختراعات' },
+                { id: 'trivia', label: '💡 ثقافة وعامة' },
+                { id: 'gaming', label: '🎮 ألعاب وجيمينج' },
+                { id: 'food', label: '🍔 تسالي وأكلات' },
+                { id: 'culture', label: '🏛️ تاريخ وتراث' },
+                { id: 'islamic', label: '🕌 دين وسيرة' }
+              ].map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => { sound.playClick(); setTopicCategoryFilter(c.id); }}
+                  className={`px-4 py-2 rounded-2xl text-xs font-black whitespace-nowrap transition-all cursor-pointer ${
+                    topicCategoryFilter === c.id
+                      ? 'bg-gradient-to-r from-amber-400 to-orange-500 text-black shadow-lg scale-105'
+                      : 'bg-black/40 text-purple-300 hover:text-white border border-purple-800/40'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Search Bar */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-purple-400 absolute right-4 top-3.5" />
+              <input
+                type="text"
+                value={topicSearch}
+                onChange={e => setTopicSearch(e.target.value)}
+                placeholder="ابحث في الـ 100 موضوع بالاسم أو الوصف (السعودية، كأس العالم، سبيستون، حيوانات، سيارات...)"
+                className="w-full pr-11 pl-4 py-3 rounded-2xl bg-black/60 border border-purple-700/60 text-xs font-bold text-white placeholder:text-purple-400/40 focus:outline-hidden focus:border-amber-400"
+              />
+            </div>
+          </div>
+
+          {/* 100 Topics Grid with Direct "صح" Button on Each Card */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {ALL_100_JAMRAIN_TOPICS
+              .filter(t => topicCategoryFilter === 'all' || t.category === topicCategoryFilter)
+              .filter(t => !topicSearch || t.title.includes(topicSearch) || t.description.includes(topicSearch))
+              .map(t => {
+                const isTeam1 = team1TopicIds.includes(t.id);
+                const isTeam2 = team2TopicIds.includes(t.id);
+                const isSelected = isTeam1 || isTeam2;
+                const isStaged = stagedTopicId === t.id;
+
+                return (
+                  <div
+                    key={t.id}
+                    onClick={() => handleToggleTopic(t.id)}
+                    className={`p-4 rounded-3xl border-2 transition-all cursor-pointer flex flex-col justify-between text-right relative overflow-hidden group ${
+                      isStaged
+                        ? 'border-emerald-400 bg-emerald-950/60 ring-4 ring-emerald-400/50 shadow-2xl scale-[1.03]'
+                        : isTeam1
+                        ? 'border-amber-400 bg-amber-500/20 shadow-xl shadow-amber-500/20'
+                        : isTeam2
+                        ? 'border-purple-400 bg-purple-600/30 shadow-xl shadow-purple-600/20'
+                        : 'border-purple-800/40 bg-[#140624] hover:border-amber-400/60 hover:bg-purple-950/40'
+                    }`}
+                  >
+                    {/* Selection Badges */}
+                    {isSelected && (
+                      <div className={`absolute top-2 left-2 px-2.5 py-0.5 rounded-full font-black text-[10px] shadow-md flex items-center gap-1 ${
+                        isTeam1 ? 'bg-amber-400 text-black' : 'bg-purple-500 text-white'
+                      }`}>
+                        <Check className="w-3 h-3" />
+                        <span>{isTeam1 ? teams[0].name : teams[1].name}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-12 h-12 rounded-2xl bg-[#200b3b] border border-purple-500/40 p-1 shrink-0 flex items-center justify-center overflow-hidden shadow-inner">
+                        <JamrainIllustration
+                          topicTitle={t.title}
+                          type={t.svgType}
+                          icon={t.icon}
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-black text-white leading-snug">
+                          {t.title}
+                        </h3>
+                        <span className="text-[11px] text-amber-300 font-bold block mt-0.5">
+                          {t.categoryLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-purple-200/80 leading-relaxed my-2 pt-2 border-t border-purple-900/40">
+                      {t.description}
+                    </p>
+
+                    {/* Prominent "صح" Confirmation Button */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleConfirmTopicToSlot(t.id);
+                      }}
+                      className={`w-full py-2.5 px-3 rounded-2xl font-black text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                        isStaged
+                          ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/40 animate-bounce'
+                          : 'bg-emerald-600/80 hover:bg-emerald-500 text-white border border-emerald-400/40'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                      <span>صح ✓ (اعتماد لـ {slotNames[activeSlotIdx]})</span>
+                    </button>
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* Bottom CTA to start game */}
+          <div className="p-4 sm:p-5 rounded-3xl bg-[#1a082e] border-2 border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-2xl">
+            <div className="text-xs text-purple-200">
+              {team1TopicIds.length === 3 && team2TopicIds.length === 3 ? (
+                <span className="text-emerald-400 font-black text-sm flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>اكتملت اختيارات الفريقين (3 لكل فريق = 6 مواضيع)! اضغط "بدء اللعبة" للدخول للمباراة.</span>
+                </span>
+              ) : (
+                <span className="text-amber-400 font-bold text-sm">
+                  متبقي {3 - (activePickerTeam === 0 ? team1TopicIds.length : team2TopicIds.length)} مواضيع لـ {currentTeamName}
+                </span>
+              )}
+            </div>
 
             <button
               disabled={team1TopicIds.length !== 3 || team2TopicIds.length !== 3}
@@ -308,312 +737,59 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                 sound.playVictory();
                 setGameState('board');
               }}
-              className={`flex-1 sm:flex-none px-6 py-2.5 rounded-xl font-black text-xs shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2 ${
+              className={`w-full sm:w-auto px-8 py-4 rounded-2xl font-black text-sm shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2 ${
                 team1TopicIds.length === 3 && team2TopicIds.length === 3
-                  ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 text-black hover:scale-105 shadow-orange-500/30'
+                  ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 text-black hover:scale-105 shadow-orange-500/40'
                   : 'bg-gray-800 text-gray-500 opacity-50 cursor-not-allowed'
               }`}
             >
-              <Flame className="w-4 h-4 fill-current" />
-              <span>بدء اللعبة بالمواضيع الـ 6 🔥</span>
+              <Flame className="w-5 h-5 fill-current" />
+              <span>بدء اللعبة بالمواضيع الستة المختارة 🔥</span>
             </button>
           </div>
         </div>
 
-        {/* Selected Topics Slots for Both Teams */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Team 1 Slots */}
-          <div
-            onClick={() => { sound.playClick(); setActivePickerTeam(0); }}
-            className={`p-4 sm:p-5 rounded-3xl border-2 transition-all cursor-pointer ${
-              activePickerTeam === 0
-                ? 'bg-gradient-to-b from-[#2e144a] to-[#160829] border-amber-400 ring-2 ring-amber-400/30 shadow-2xl scale-[1.01]'
-                : 'bg-[#120520] border-purple-900/50 opacity-80 hover:opacity-100'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-3 border-b border-purple-900/40 pb-2">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-amber-400" />
-                <span className="text-sm font-black text-white">{teams[0].name}</span>
-                <span className="text-[10px] text-amber-300 font-bold bg-amber-500/20 px-2 py-0.5 rounded-full">
-                  {team1TopicIds.length} من 3
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.playClick();
-                  setIsRenamingTeam(0);
-                  setEditTeamName(teams[0].name);
-                }}
-                className="text-[11px] text-purple-300 hover:text-white flex items-center gap-1 cursor-pointer"
-              >
-                <Edit3 className="w-3 h-3" />
-                <span>تعديل الاسم</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              {[0, 1, 2].map((idx) => {
-                const topicId = team1TopicIds[idx];
-                const topic = ALL_100_JAMRAIN_TOPICS.find(t => t.id === topicId);
-                return (
-                  <div
-                    key={idx}
-                    className={`p-2.5 rounded-2xl border text-center transition-all flex flex-col items-center justify-center min-h-[90px] relative ${
-                      topic
-                        ? 'bg-amber-500/20 border-amber-400/80 text-white shadow-inner'
-                        : 'bg-black/40 border-dashed border-purple-800/60 text-purple-400'
-                    }`}
-                  >
-                    {topic ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleTopic(topic.id);
-                          }}
-                          className="absolute top-1 left-1 w-5 h-5 rounded-full bg-black/60 text-amber-300 hover:bg-red-600 hover:text-white flex items-center justify-center text-[10px] cursor-pointer"
-                          title="إزالة الموضوع"
-                        >
-                          ✕
-                        </button>
-                        <span className="text-xl mb-1">{topic.icon}</span>
-                        <span className="text-xs font-black text-amber-200 line-clamp-2 leading-tight">
-                          {topic.title}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-[11px] font-bold text-purple-400/60">
-                        + اختر موضوع {idx + 1}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Team 2 Slots */}
-          <div
-            onClick={() => { sound.playClick(); setActivePickerTeam(1); }}
-            className={`p-4 sm:p-5 rounded-3xl border-2 transition-all cursor-pointer ${
-              activePickerTeam === 1
-                ? 'bg-gradient-to-b from-[#2e144a] to-[#160829] border-purple-400 ring-2 ring-purple-400/30 shadow-2xl scale-[1.01]'
-                : 'bg-[#120520] border-purple-900/50 opacity-80 hover:opacity-100'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-3 border-b border-purple-900/40 pb-2">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-purple-400" />
-                <span className="text-sm font-black text-white">{teams[1].name}</span>
-                <span className="text-[10px] text-purple-300 font-bold bg-purple-500/20 px-2 py-0.5 rounded-full">
-                  {team2TopicIds.length} من 3
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.playClick();
-                  setIsRenamingTeam(1);
-                  setEditTeamName(teams[1].name);
-                }}
-                className="text-[11px] text-purple-300 hover:text-white flex items-center gap-1 cursor-pointer"
-              >
-                <Edit3 className="w-3 h-3" />
-                <span>تعديل الاسم</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              {[0, 1, 2].map((idx) => {
-                const topicId = team2TopicIds[idx];
-                const topic = ALL_100_JAMRAIN_TOPICS.find(t => t.id === topicId);
-                return (
-                  <div
-                    key={idx}
-                    className={`p-2.5 rounded-2xl border text-center transition-all flex flex-col items-center justify-center min-h-[90px] relative ${
-                      topic
-                        ? 'bg-purple-600/25 border-purple-400/80 text-white shadow-inner'
-                        : 'bg-black/40 border-dashed border-purple-800/60 text-purple-400'
-                    }`}
-                  >
-                    {topic ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleTopic(topic.id);
-                          }}
-                          className="absolute top-1 left-1 w-5 h-5 rounded-full bg-black/60 text-purple-300 hover:bg-red-600 hover:text-white flex items-center justify-center text-[10px] cursor-pointer"
-                          title="إزالة الموضوع"
-                        >
-                          ✕
-                        </button>
-                        <span className="text-xl mb-1">{topic.icon}</span>
-                        <span className="text-xs font-black text-purple-200 line-clamp-2 leading-tight">
-                          {topic.title}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-[11px] font-bold text-purple-400/60">
-                        + اختر موضوع {idx + 1}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Categories Bar & Search Filter */}
-        <div className="p-4 rounded-3xl bg-[#120520] border border-purple-900/50 space-y-3">
-          {/* Category Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
-            {[
-              { id: 'all', label: '📌 جميع الـ 100 موضوع' },
-              { id: 'sports', label: '⚽ رياضة وكورة' },
-              { id: 'cinema', label: '🎬 سينما وتلفزيون' },
-              { id: 'science', label: '🔬 علوم واختراعات' },
-              { id: 'trivia', label: '💡 ثقافة وعامة' },
-              { id: 'gaming', label: '🎮 ألعاب وجيمينج' },
-              { id: 'food', label: '🍔 تسالي وأكلات' },
-              { id: 'culture', label: '🏛️ تاريخ وتراث' },
-              { id: 'islamic', label: '🕌 دين وسيرة' }
-            ].map(c => (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => { sound.playClick(); setTopicCategoryFilter(c.id); }}
-                className={`px-4 py-2 rounded-2xl text-xs font-black whitespace-nowrap transition-all cursor-pointer ${
-                  topicCategoryFilter === c.id
-                    ? 'bg-gradient-to-r from-amber-400 to-orange-500 text-black shadow-lg scale-105'
-                    : 'bg-black/40 text-purple-300 hover:text-white border border-purple-800/40'
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Search Bar */}
-          <div className="relative">
-            <Search className="w-4 h-4 text-purple-400 absolute right-4 top-3.5" />
-            <input
-              type="text"
-              value={topicSearch}
-              onChange={e => setTopicSearch(e.target.value)}
-              placeholder="ابحث في المواضيع بالاسم أو الوصف (كأس العالم، سبيستون، حيوانات، شيبسات، سيارات...)"
-              className="w-full pr-11 pl-4 py-3 rounded-2xl bg-black/60 border border-purple-700/60 text-xs font-bold text-white placeholder:text-purple-400/40 focus:outline-hidden focus:border-amber-400"
-            />
-          </div>
-        </div>
-
-        {/* 100 Topics Grid (Cards with VERY CLEAR Names) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-          {ALL_100_JAMRAIN_TOPICS
-            .filter(t => topicCategoryFilter === 'all' || t.category === topicCategoryFilter)
-            .filter(t => !topicSearch || t.title.includes(topicSearch) || t.description.includes(topicSearch))
-            .map(t => {
-              const isTeam1 = team1TopicIds.includes(t.id);
-              const isTeam2 = team2TopicIds.includes(t.id);
-              const isSelected = isTeam1 || isTeam2;
-
-              return (
-                <div
-                  key={t.id}
-                  onClick={() => handleToggleTopic(t.id)}
-                  className={`p-4 rounded-3xl border-2 transition-all cursor-pointer flex flex-col justify-between text-right relative overflow-hidden group ${
-                    isTeam1
-                      ? 'border-amber-400 bg-amber-500/20 shadow-xl shadow-amber-500/20 scale-[1.02]'
-                      : isTeam2
-                      ? 'border-purple-400 bg-purple-600/30 shadow-xl shadow-purple-600/20 scale-[1.02]'
-                      : 'border-purple-800/40 bg-[#140624] hover:border-amber-400/60 hover:bg-purple-950/40'
-                  }`}
-                >
-                  {/* Selection Badge */}
-                  {isSelected && (
-                    <div className={`absolute top-2 left-2 px-2.5 py-0.5 rounded-full font-black text-[10px] shadow-md flex items-center gap-1 ${
-                      isTeam1 ? 'bg-amber-400 text-black' : 'bg-purple-500 text-white'
-                    }`}>
-                      <Check className="w-3 h-3" />
-                      <span>{isTeam1 ? teams[0].name : teams[1].name}</span>
-                    </div>
-                  )}
-
-                  <div>
-                    <div className="text-3xl mb-2">{t.icon || '🔥'}</div>
-                    {/* Clear, Bold, Visible Title (No truncation!) */}
-                    <h3 className="text-base font-black text-white leading-snug">
-                      {t.title}
-                    </h3>
-                    <span className="text-[11px] text-amber-300 font-bold block mt-1">
-                      {t.categoryLabel}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-purple-200/80 leading-relaxed mt-2 pt-2 border-t border-purple-900/40">
-                    {t.description}
-                  </p>
+        {/* Sticky Floating Confirmation Pill When a Topic is Staged */}
+        {stagedTopicId && stagedTopicObj && (
+          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 bg-[#16062a]/95 backdrop-blur-xl border-2 border-emerald-400 p-3 sm:p-4 rounded-3xl shadow-2xl flex items-center justify-between gap-4 animate-in slide-in-from-bottom-5 max-w-xl w-[92%]">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">{stagedTopicObj.icon}</span>
+              <div className="text-right">
+                <div className="text-[10px] text-emerald-300 font-bold">
+                  الموضوع المحدد لـ {currentTeamName}:
                 </div>
-              );
-            })}
-        </div>
-
-        {/* Bottom CTA to start game */}
-        <div className="p-4 rounded-3xl bg-[#1a082e] border-2 border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xl">
-          <div className="text-xs text-purple-200">
-            {team1TopicIds.length === 3 && team2TopicIds.length === 3 ? (
-              <span className="text-emerald-400 font-black text-sm">
-                ✓ اكتملت اختيارات الفريقين (3 لكل فريق = 6 مواضيع)! اضغط بدء اللعبة للانتقال للوحة.
-              </span>
-            ) : (
-              <span className="text-amber-400 font-bold">
-                متبقي: {3 - (activePickerTeam === 0 ? team1TopicIds.length : team2TopicIds.length)} مواضيع لـ {activePickerTeam === 0 ? teams[0].name : teams[1].name}
-              </span>
-            )}
+                <div className="text-sm font-black text-white">{stagedTopicObj.title}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleConfirmTopicToSlot(stagedTopicId)}
+              className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-white font-black text-xs sm:text-sm shadow-lg flex items-center gap-2 cursor-pointer transition-transform active:scale-95 animate-pulse shrink-0"
+            >
+              <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
+              <span>صح ✓ (اعتماد {slotNames[activeSlotIdx]})</span>
+            </button>
           </div>
-
-          <button
-            disabled={team1TopicIds.length !== 3 || team2TopicIds.length !== 3}
-            onClick={() => {
-              sound.playVictory();
-              setGameState('board');
-            }}
-            className={`w-full sm:w-auto px-8 py-3.5 rounded-2xl font-black text-sm shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2 ${
-              team1TopicIds.length === 3 && team2TopicIds.length === 3
-                ? 'bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 text-black hover:scale-105 shadow-orange-500/30'
-                : 'bg-gray-800 text-gray-500 opacity-50 cursor-not-allowed'
-            }`}
-          >
-            <Flame className="w-5 h-5 fill-current" />
-            <span>بدء اللعبة بالمواضيع الستة المختارة 🔥</span>
-          </button>
-        </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-2 select-none font-sans text-slate-900">
+    <div className="w-full min-h-screen select-none font-sans text-slate-900 flex flex-col bg-slate-100">
       
       {/* ========================================================================= */}
-      {/* THE MAIN JAMRAIN BOARD CONTAINER (REPLICATING THE REFERENCE SCREENSHOT)  */}
+      {/* THE MAIN JAMRAIN BOARD CONTAINER (FULL-PAGE TELEVISED GAME SHOW)          */}
       {/* ========================================================================= */}
-      <div className="rounded-3xl overflow-hidden shadow-2xl border-4 border-[#3c2a82] bg-white flex flex-col">
+      <div className="w-full flex-1 flex flex-col bg-white">
         
-        {/* ==================== 1. TOP PURPLE HEADER BAR ==================== */}
-        <div className="bg-[#4c359e] px-4 py-3 sm:py-3.5 flex items-center justify-between text-white border-b-2 border-[#3d2787]">
+        {/* ==================== 1. TOP PURPLE HEADER BAR (FULL WIDTH) ==================== */}
+        <div className="bg-[#4c359e] w-full px-4 sm:px-8 py-3.5 sm:py-4 flex items-center justify-between text-white border-b-2 border-[#3d2787] shadow-md">
           {/* Left Exit Button */}
           <button
             onClick={onExit}
             title="الخروج للقائمة"
-            className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/30 flex items-center justify-center transition-all cursor-pointer text-white font-bold text-lg active:scale-95"
+            className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/30 flex items-center justify-center transition-all cursor-pointer text-white font-bold text-lg active:scale-95"
           >
             ✕
           </button>
@@ -625,7 +801,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
             </span>
             <button
               onClick={() => { sound.playClick(); setGameState('pick_topics'); }}
-              className="px-3 py-1 rounded-full bg-white/20 hover:bg-white/30 text-white text-xs font-black transition-colors flex items-center gap-1.5 cursor-pointer border border-white/30"
+              className="px-3.5 py-1.5 rounded-full bg-white/20 hover:bg-white/30 text-white text-xs font-black transition-colors flex items-center gap-1.5 cursor-pointer border border-white/30"
               title="تغيير المواضيع من قائمة الـ 100 موضوع"
             >
               <Shuffle className="w-3.5 h-3.5 text-amber-300" />
@@ -633,7 +809,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
             </button>
           </div>
 
-          {/* Right Team Turn Badge (Exact style from screenshot: 'دور الفريق: Yousef') */}
+          {/* Right Team Turn Badge */}
           <div className="flex items-center gap-2">
             <div 
               onClick={() => {
@@ -660,7 +836,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                 <div key={topic.id} className="flex flex-col items-center">
                   
                   {/* Top Black Pill Badge with Topic Name */}
-                  <div className="z-10 -mb-3 bg-black text-white px-5 py-1.5 rounded-full shadow-lg border border-black/80 font-black text-xs sm:text-sm tracking-wide text-center min-w-[130px] max-w-[200px] truncate">
+                  <div className="z-10 -mb-3 bg-black text-white px-3 sm:px-4 py-1 sm:py-1.5 rounded-full shadow-lg border border-black/80 font-black text-xs sm:text-sm tracking-wide text-center min-w-[120px] max-w-[260px] break-words leading-tight">
                     {topic.title}
                   </div>
 
@@ -699,6 +875,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                       <JamrainIllustration
                         topicTitle={topic.title}
                         type={topic.svgType}
+                        icon={topic.icon}
                         className="w-full h-full object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.3)]"
                       />
                     </div>
@@ -847,6 +1024,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                   <JamrainIllustration
                     topicTitle={activeQuestion.topic.title}
                     type={activeQuestion.topic.svgType}
+                    icon={activeQuestion.topic.icon}
                     className="w-full h-full object-contain"
                   />
                 </div>
@@ -1158,7 +1336,7 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
 
                       <div>
                         <div className="text-2xl mb-1.5">{t.icon || '🔥'}</div>
-                        <h4 className="text-xs font-black text-white line-clamp-1">{t.title}</h4>
+                        <h4 className="text-xs sm:text-sm font-black text-white break-words leading-snug">{t.title}</h4>
                         <span className="text-[10px] text-amber-300/80 font-bold">{t.categoryLabel}</span>
                       </div>
 

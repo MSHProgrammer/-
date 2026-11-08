@@ -10,6 +10,7 @@ import { JamrainEngine } from './engines/JamrainEngine';
 import { HuroofJamrEngine } from './engines/HuroofJamrEngine';
 import { MafiaNoHakamEngine } from './engines/MafiaNoHakamEngine';
 import { BarrahSalfaEngine } from './engines/BarrahSalfaEngine';
+import { SoundMimicEngine } from './engines/SoundMimicEngine';
 
 interface OfflineGameRunnerProps {
   initialGame?: GameInfo | null;
@@ -27,6 +28,18 @@ export const OfflineGameRunner: React.FC<OfflineGameRunnerProps> = ({
   const [selectedGame, setSelectedGame] = useState<GameInfo>(
     initialGame || JAMR_GAMES_CATALOG.find(g => g.id === 'jamrain') || JAMR_GAMES_CATALOG[0]
   );
+
+  if (selectedGame.engineType === 'jamrain') {
+    return (
+      <div className="w-full min-h-screen">
+        <JamrainEngine
+          topics={topics}
+          questions={questions}
+          onExit={onExit}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -70,15 +83,6 @@ export const OfflineGameRunner: React.FC<OfflineGameRunnerProps> = ({
         </div>
       </div>
 
-      {/* Render the Exact Offline Engine Requested */}
-      {selectedGame.engineType === 'jamrain' && (
-        <JamrainEngine
-          topics={topics}
-          questions={questions}
-          onExit={onExit}
-        />
-      )}
-
       {selectedGame.engineType === 'huroof' && (
         <HuroofJamrEngine
           onExit={onExit}
@@ -88,13 +92,7 @@ export const OfflineGameRunner: React.FC<OfflineGameRunnerProps> = ({
       {selectedGame.engineType === 'mafia' && (
         <MafiaNoHakamEngine
           mode="offline"
-          players={[
-            { id: 'p1', name: 'حمد', avatar: '🔥', score: 0 },
-            { id: 'p2', name: 'خالد', avatar: '⚡', score: 0 },
-            { id: 'p3', name: 'محمد', avatar: '👑', score: 0 },
-            { id: 'p4', name: 'سلطان', avatar: '💎', score: 0 },
-            { id: 'p5', name: 'فهد', avatar: '🎯', score: 0 }
-          ]}
+          players={[]}
           onExit={onExit}
         />
       )}
@@ -102,15 +100,18 @@ export const OfflineGameRunner: React.FC<OfflineGameRunnerProps> = ({
       {selectedGame.engineType === 'barrah_salfa' && (
         <BarrahSalfaEngine
           mode="offline"
-          players={[
-            { id: 'p1', name: 'حمد', avatar: '🔥', score: 0 },
-            { id: 'p2', name: 'خالد', avatar: '⚡', score: 0 },
-            { id: 'p3', name: 'محمد', avatar: '👑', score: 0 },
-            { id: 'p4', name: 'سلطان', avatar: '💎', score: 0 }
-          ]}
+          players={[]}
           currentRound={1}
           totalRounds={5}
           onNextRound={() => {}}
+        />
+      )}
+
+      {selectedGame.engineType === 'sound_mimic' && (
+        <SoundMimicEngine
+          mode="offline"
+          players={[]}
+          onExit={onExit}
         />
       )}
     </div>

@@ -11,6 +11,7 @@ import { Topic, Question, Section, JamrMatchState, BoardTile, LifelineType } fro
 import { GameInfo, GameCategory } from './src/types/game.ts';
 import { GoogleGenAI } from '@google/genai';
 import { DEFAULT_BARRAH_CATEGORIES, BarrahCategory } from './src/data/barrahSalfaCategories.ts';
+import { MIMIC_SOUNDS_BANK, MimicSoundItem } from './src/data/mimicSoundsBank.ts';
 
 export interface BugReport {
   id: string;
@@ -91,6 +92,7 @@ let questions: Question[] = [...DEFAULT_QUESTIONS];
 let games: GameInfo[] = [...JAMR_GAMES_CATALOG];
 let barrahCategories: BarrahCategory[] = [...DEFAULT_BARRAH_CATEGORIES];
 let reports: BugReport[] = [];
+let mimicSounds: MimicSoundItem[] = [...MIMIC_SOUNDS_BANK];
 
 // Load persisted DB if exists
 try {
@@ -145,6 +147,9 @@ try {
         }
       }
     }
+    if (Array.isArray(parsed.mimicSounds) && parsed.mimicSounds.length > 0) {
+      mimicSounds = parsed.mimicSounds;
+    }
     if (Array.isArray(parsed.reports)) {
       reports = parsed.reports;
     }
@@ -155,7 +160,7 @@ try {
 
 function saveDatabase() {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ sections, topics, questions, games, barrahCategories, reports }, null, 2), 'utf-8');
+    fs.writeFileSync(DB_FILE, JSON.stringify({ sections, topics, questions, games, barrahCategories, reports, mimicSounds }, null, 2), 'utf-8');
   } catch (err) {
     console.error('Failed to save jamr_data_store.json:', err);
   }
@@ -179,6 +184,12 @@ interface ServerRoom {
   createdAt: number;
   lastActive: number;
   players: ServerPlayer[];
+  gameId?: string;
+  status?: 'lobby' | 'playing' | 'round_results' | 'game_over';
+  maxPlayers?: number;
+  currentRound?: number;
+  totalRounds?: number;
+  gameData?: any;
   match: JamrMatchState;
   messages: Array<{
     id: string;
@@ -306,7 +317,38 @@ function createInitialMatch(chosenTopics?: Topic[], team1Name = 'الفريق ا
 
 function broadcastRoom(room: ServerRoom) {
   room.lastActive = Date.now();
-  const payload = JSON.stringify({
+
+  // 1. Format for OnlineGameView (RoomState format)
+  const roomStatePayload = JSON.stringify({
+    type: 'room_state',
+    room: {
+      code: room.code,
+      gameId: room.gameId || 'barrah_salfa',
+      hostId: room.hostId,
+      status: room.status || (room.match?.status === 'playing' ? 'playing' : 'lobby'),
+      maxPlayers: room.maxPlayers || 16,
+      currentRound: room.currentRound || 1,
+      totalRounds: room.totalRounds || 5,
+      timerSeconds: room.match?.activeQuestion?.remainingSeconds || 0,
+      timerActive: !!room.match?.activeQuestion?.timerRunning,
+      players: room.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        avatar: p.avatar,
+        isHost: p.isHost,
+        isReady: p.isReady,
+        connected: p.connected,
+        score: p.team === 'team1' ? room.match?.teams?.team1?.score || 0 : p.team === 'team2' ? room.match?.teams?.team2?.score || 0 : 0,
+        team: p.team
+      })),
+      messages: room.messages,
+      lastActive: room.lastActive,
+      gameData: room.gameData
+    }
+  });
+
+  // 2. Format for OnlineMatchView (ServerRoom format)
+  const roomUpdatePayload = JSON.stringify({
     type: 'room_update',
     room: {
       code: room.code,
@@ -327,7 +369,12 @@ function broadcastRoom(room: ServerRoom) {
 
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === WebSocket.OPEN) {
-      p.ws.send(payload);
+      try {
+        p.ws.send(roomStatePayload);
+        p.ws.send(roomUpdatePayload);
+      } catch (err) {
+        console.error('WebSocket send error:', err);
+      }
     }
   }
 }
@@ -944,6 +991,61 @@ app.delete('/api/admin/barrah/categories/:id', requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== MIMIC SOUNDS API ====================
+app.get('/api/mimic/sounds', (req, res) => {
+  res.json({ success: true, sounds: mimicSounds });
+});
+
+app.post('/api/admin/mimic/sounds', requireAdmin, (req, res) => {
+  const { title, category, description, soundType, audioClipText, targetDurationSec, audioUrl, icon } = req.body;
+  if (!title) {
+    return res.status(400).json({ error: 'عنوان الصوت مطلوب' });
+  }
+  const newSound: MimicSoundItem = {
+    id: 'mimic_' + Date.now() + Math.random().toString(36).substring(2, 6),
+    title: sanitizeText(title, 80),
+    category: sanitizeText(category || 'ميمز وترند', 50),
+    description: sanitizeText(description || '', 200),
+    soundType: sanitizeText(soundType || 'bark', 40),
+    audioClipText: sanitizeText(audioClipText || '', 100),
+    targetDurationSec: Number(targetDurationSec) || 4,
+    audioUrl: audioUrl ? String(audioUrl) : undefined,
+    icon: icon ? sanitizeText(icon, 10) : '🎙️'
+  };
+  mimicSounds.unshift(newSound);
+  saveDatabase();
+  res.json({ success: true, sound: newSound });
+});
+
+app.put('/api/admin/mimic/sounds/:id', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const idx = mimicSounds.findIndex(s => s.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'الصوت غير موجود' });
+  }
+  const { title, category, description, soundType, audioClipText, targetDurationSec, audioUrl, icon } = req.body;
+  mimicSounds[idx] = {
+    ...mimicSounds[idx],
+    title: title ? sanitizeText(title, 80) : mimicSounds[idx].title,
+    category: category ? sanitizeText(category, 50) : mimicSounds[idx].category,
+    description: description !== undefined ? sanitizeText(description, 200) : mimicSounds[idx].description,
+    soundType: soundType ? sanitizeText(soundType, 40) : mimicSounds[idx].soundType,
+    audioClipText: audioClipText !== undefined ? sanitizeText(audioClipText, 100) : mimicSounds[idx].audioClipText,
+    targetDurationSec: targetDurationSec !== undefined ? Number(targetDurationSec) : mimicSounds[idx].targetDurationSec,
+    audioUrl: audioUrl !== undefined ? (audioUrl ? String(audioUrl) : undefined) : mimicSounds[idx].audioUrl,
+    icon: icon ? sanitizeText(icon, 10) : mimicSounds[idx].icon
+  };
+  saveDatabase();
+  res.json({ success: true, sound: mimicSounds[idx] });
+});
+
+app.delete('/api/admin/mimic/sounds/:id', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  mimicSounds = mimicSounds.filter(s => s.id !== id);
+  saveDatabase();
+  res.json({ success: true });
+});
+
 // ==================== BUG REPORTS API ====================
 app.post('/api/reports', (req, res) => {
   const { type, gameTitle, description, reporterName, reporterContact } = req.body;
@@ -1093,30 +1195,116 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(data.toString());
       const type = msg.type;
 
-      // 1. Join Room
+      // 0. Create Room over WebSocket
+      if (type === 'create_room') {
+        const code = generateRoomCode();
+        const hostId = 'p_' + Date.now() + Math.random().toString(36).substring(2, 6);
+        const hostName = String(msg.playerName || msg.name || 'المضيف').trim();
+        const hostAvatar = msg.avatar || '🔥';
+        const gameId = msg.gameId || 'barrah_salfa';
+
+        currentRoomCode = code;
+        currentPlayerId = hostId;
+
+        const hostPlayer: ServerPlayer = {
+          id: hostId,
+          name: hostName,
+          team: 'team1',
+          avatar: hostAvatar,
+          isHost: true,
+          isReady: true,
+          connected: true,
+          ws
+        };
+
+        const newRoom: ServerRoom = {
+          code,
+          hostId,
+          createdAt: Date.now(),
+          lastActive: Date.now(),
+          players: [hostPlayer],
+          gameId,
+          status: 'lobby',
+          match: createInitialMatch(topics.slice(0, 6)),
+          messages: [
+            {
+              id: 'msg_welcome',
+              senderId: 'system',
+              senderName: 'جَمْر',
+              text: `أهلاً بكم في غرفة جمر! رمز الغرفة: ${code}`,
+              timestamp: Date.now(),
+              isSystem: true
+            }
+          ]
+        };
+
+        rooms.set(code, newRoom);
+
+        ws.send(JSON.stringify({
+          type: 'joined',
+          roomCode: code,
+          playerId: hostId,
+          room: {
+            code,
+            gameId,
+            hostId,
+            status: 'lobby',
+            maxPlayers: 16,
+            players: [{
+              id: hostId,
+              name: hostName,
+              avatar: hostAvatar,
+              isHost: true,
+              isReady: true,
+              connected: true
+            }],
+            currentRound: 1,
+            totalRounds: 5,
+            timerSeconds: 0,
+            timerActive: false,
+            messages: newRoom.messages,
+            lastActive: Date.now()
+          }
+        }));
+
+        ws.send(JSON.stringify({
+          type: 'joined_success',
+          playerId: hostId,
+          isHost: true,
+          team: 'team1'
+        }));
+
+        broadcastRoom(newRoom);
+        return;
+      }
+
+      // 1. Join Room (Allow joining even after an hour if match not ended)
       if (type === 'join_room') {
-        const { code, playerId, name, avatar, team } = msg;
-        const normalizedCode = String(code).toUpperCase().trim();
+        const rawCode = msg.code || msg.roomCode || '';
+        const normalizedCode = String(rawCode).toUpperCase().trim();
+        const pName = String(msg.playerName || msg.name || 'لاعب جمر').trim();
+        const pAvatar = msg.avatar || '⚡';
+        const pId = msg.playerId || msg.existingPlayerId;
+
         const room = rooms.get(normalizedCode);
         if (!room) {
-          ws.send(JSON.stringify({ type: 'error', message: 'الغرفة غير موجودة' }));
+          ws.send(JSON.stringify({ type: 'error', message: 'الغرفة غير موجودة أو انتهت' }));
           return;
         }
 
         currentRoomCode = normalizedCode;
-        let player = room.players.find(p => p.id === playerId);
+        let player = pId ? room.players.find(p => p.id === pId) : null;
         if (!player) {
-          const newPlayerId = playerId || ('p_' + Date.now() + Math.random().toString(36).substring(2, 6));
-          // Balance team assignment
+          const newPlayerId = pId || ('p_' + Date.now() + Math.random().toString(36).substring(2, 6));
           const t1Count = room.players.filter(p => p.team === 'team1').length;
           const t2Count = room.players.filter(p => p.team === 'team2').length;
-          const assignedTeam = team || (t1Count <= t2Count ? 'team1' : 'team2');
+          const assignedTeam = msg.team || (t1Count <= t2Count ? 'team1' : 'team2');
 
           player = {
             id: newPlayerId,
-            name: String(name || 'لاعب جمر').trim(),
+            name: pName,
             team: assignedTeam,
-            avatar: avatar || '⚡',
+            avatar: pAvatar,
             isHost: room.players.length === 0,
             isReady: false,
             connected: true,
@@ -1124,12 +1312,21 @@ wss.on('connection', (ws) => {
           };
           room.players.push(player);
           currentPlayerId = newPlayerId;
+
+          room.messages.push({
+            id: 'sys_' + Date.now(),
+            senderId: 'system',
+            senderName: 'جَمْر',
+            text: `انضم ${player.name} إلى الغرفة! 🎉`,
+            timestamp: Date.now(),
+            isSystem: true
+          });
         } else {
           player.connected = true;
           player.ws = ws;
           currentPlayerId = player.id;
-          if (name) player.name = String(name).trim();
-          if (avatar) player.avatar = avatar;
+          if (pName) player.name = pName;
+          if (pAvatar) player.avatar = pAvatar;
         }
 
         ws.send(JSON.stringify({
@@ -1137,6 +1334,35 @@ wss.on('connection', (ws) => {
           playerId: player.id,
           isHost: player.isHost,
           team: player.team
+        }));
+
+        ws.send(JSON.stringify({
+          type: 'joined',
+          roomCode: room.code,
+          playerId: player.id,
+          room: {
+            code: room.code,
+            gameId: room.gameId || 'barrah_salfa',
+            hostId: room.hostId,
+            status: room.status || 'lobby',
+            maxPlayers: room.maxPlayers || 16,
+            players: room.players.map(p => ({
+              id: p.id,
+              name: p.name,
+              avatar: p.avatar,
+              isHost: p.isHost,
+              isReady: p.isReady,
+              connected: p.connected,
+              team: p.team
+            })),
+            currentRound: room.currentRound || 1,
+            totalRounds: room.totalRounds || 5,
+            timerSeconds: 0,
+            timerActive: false,
+            messages: room.messages,
+            lastActive: Date.now(),
+            gameData: room.gameData
+          }
         }));
 
         broadcastRoom(room);
@@ -1413,21 +1639,144 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      // 10. Chat & Emoji Reactions
-      if (type === 'chat_message') {
-        const text = String(msg.text || '').trim().substring(0, 200);
+      // 10. Chat & Emoji Reactions (Broadcast to all clients in the room)
+      if (type === 'chat_message' || type === 'send_chat') {
+        const text = String(msg.text || '').trim().substring(0, 300);
         if (text) {
-          room.messages.push({
-            id: 'c_' + Date.now() + Math.random().toString(36).substring(2, 5),
+          const chatMsg = {
+            id: 'c_' + Date.now() + Math.random().toString(36).substring(2, 6),
             senderId: player.id,
             senderName: player.name,
             team: player.team,
             text,
             timestamp: Date.now()
-          });
-          if (room.messages.length > 60) room.messages.shift();
+          };
+          room.messages.push(chatMsg);
+          if (room.messages.length > 80) room.messages.shift();
           broadcastRoom(room);
         }
+        return;
+      }
+
+      // 11. Kick Player (Host only, notifies kicked player and broadcasts update)
+      if (type === 'kick_player') {
+        if (!player.isHost) return;
+        const targetId = msg.targetPlayerId || msg.playerIdToKick;
+        if (!targetId) return;
+
+        const targetPlayer = room.players.find(p => p.id === targetId);
+        if (targetPlayer) {
+          if (targetPlayer.ws && targetPlayer.ws.readyState === WebSocket.OPEN) {
+            try {
+              targetPlayer.ws.send(JSON.stringify({
+                type: 'kicked',
+                message: 'تم استبعادك من الغرفة بواسطة المضيف.'
+              }));
+            } catch (_) {}
+          }
+
+          room.players = room.players.filter(p => p.id !== targetId);
+          room.messages.push({
+            id: 'sys_' + Date.now(),
+            senderId: 'system',
+            senderName: 'جَمْر',
+            text: `تم استبعاد ${targetPlayer.name} من الغرفة.`,
+            timestamp: Date.now(),
+            isSystem: true
+          });
+          broadcastRoom(room);
+        }
+        return;
+      }
+
+      // 12. Real WebRTC Voice Chat Signaling
+      if (type === 'voice_signal') {
+        const { toPlayerId, signal } = msg;
+        if (toPlayerId) {
+          const target = room.players.find(p => p.id === toPlayerId);
+          if (target && target.ws && target.ws.readyState === WebSocket.OPEN) {
+            target.ws.send(JSON.stringify({
+              type: 'voice_signal',
+              fromPlayerId: player.id,
+              signal
+            }));
+          }
+        } else {
+          for (const p of room.players) {
+            if (p.id !== player.id && p.ws && p.ws.readyState === WebSocket.OPEN) {
+              p.ws.send(JSON.stringify({
+                type: 'voice_signal',
+                fromPlayerId: player.id,
+                signal
+              }));
+            }
+          }
+        }
+        return;
+      }
+
+      // 13. General Game Room Lifecycle (Host Actions)
+      if (type === 'start_game') {
+        if (!player.isHost) return;
+        room.status = 'playing';
+        room.currentRound = 1;
+        room.messages.push({
+          id: 'sys_' + Date.now(),
+          senderId: 'system',
+          senderName: 'جَمْر',
+          text: '🔥 بدأت اللعبة للجميع! ولّعوا الحماس!',
+          timestamp: Date.now(),
+          isSystem: true
+        });
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'change_game') {
+        if (!player.isHost) return;
+        room.gameId = msg.gameId;
+        room.status = 'lobby';
+        room.gameData = undefined;
+        room.messages.push({
+          id: 'sys_' + Date.now(),
+          senderId: 'system',
+          senderName: 'جَمْر',
+          text: `تم تغيير اللعبة إلى: ${msg.gameTitle || msg.gameId}`,
+          timestamp: Date.now(),
+          isSystem: true
+        });
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'next_round') {
+        if (!player.isHost) return;
+        room.currentRound = (room.currentRound || 1) + 1;
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'return_to_lobby') {
+        if (!player.isHost) return;
+        room.status = 'lobby';
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'submit_answer') {
+        if (!room.gameData) room.gameData = {};
+        if (!room.gameData.playerAnswers) room.gameData.playerAnswers = {};
+        room.gameData.playerAnswers[player.id] = msg.answer;
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'vote_player') {
+        if (!room.gameData) room.gameData = {};
+        if (!room.gameData.votes) room.gameData.votes = {};
+        const tid = msg.targetPlayerId;
+        room.gameData.votes[tid] = (room.gameData.votes[tid] || 0) + 1;
+        broadcastRoom(room);
         return;
       }
     } catch (err) {

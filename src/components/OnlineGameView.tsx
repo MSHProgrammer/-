@@ -17,6 +17,7 @@ interface OnlineGameViewProps {
   initialAction?: 'create' | 'join';
   initialRoomCode?: string;
   initialGame?: GameInfo | null;
+  defaultPlayerName?: string;
   onExit: () => void;
 }
 
@@ -24,6 +25,7 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
   initialAction = 'create',
   initialRoomCode = '',
   initialGame,
+  defaultPlayerName = '',
   onExit
 }) => {
   const [isInRoom, setIsInRoom] = useState(false);
@@ -31,12 +33,17 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // Guest Setup Form State
+  // Guest Setup Form State: Use single chosen name everywhere
   const profile = getUserProfile();
+  const resolvedName = (defaultPlayerName && defaultPlayerName.trim())
+    || (typeof window !== 'undefined' ? localStorage.getItem('jamr_player_name') : '')
+    || profile.username
+    || '';
+
   const [mode, setMode] = useState<'create' | 'join'>(
     initialAction === 'join' || (initialRoomCode && initialRoomCode.trim().length > 0) ? 'join' : 'create'
   );
-  const [playerName, setPlayerName] = useState(profile.username || 'ولاع_الجمعة');
+  const [playerName, setPlayerName] = useState(resolvedName);
   const [selectedAvatar, setSelectedAvatar] = useState(profile.avatar || '🔥');
   const [roomCodeInput, setRoomCodeInput] = useState(initialRoomCode);
   const [selectedGameId, setSelectedGameId] = useState(initialGame?.id || 'barrah_salfa');
@@ -552,6 +559,8 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
                   mode="online"
                   players={room.players}
                   onlineRoomData={room.gameData}
+                  myPlayerId={myPlayerId || undefined}
+                  socket={socket}
                   onOnlineScore={(score) => socket.send({ type: 'mimic_score', score })}
                   onExit={handleLeaveRoom}
                 />

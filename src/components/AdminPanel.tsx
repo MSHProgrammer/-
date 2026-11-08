@@ -4,9 +4,110 @@ import { GameInfo, GameCategory, DifficultyLevel } from '../types/game';
 import { JAMR_GAMES_CATALOG } from '../data/gamesCatalog';
 import { COMIC_PRESETS } from '../data/comicAssets';
 import { DEFAULT_BARRAH_CATEGORIES, BarrahCategory } from '../data/barrahSalfaCategories';
-import { Shield, Plus, Trash2, Edit2, Download, Upload, Eye, Check, X, Flame, Search, ArrowRight, Layers, FileQuestion, Users, RefreshCw, FolderOpen, Image, Palette, Camera, UploadCloud, CheckCircle2, AlertCircle, Loader2, Video, Film, PlayCircle, Gamepad2, Globe, Laptop, Sparkles, Bot, Wand2, AlertTriangle, Bug, MessageSquare } from 'lucide-react';
+import { MIMIC_SOUNDS_BANK, MimicSoundItem } from '../data/mimicSoundsBank';
+import { Shield, Plus, Trash2, Edit2, Download, Upload, Eye, Check, X, Flame, Search, ArrowRight, Layers, FileQuestion, Users, RefreshCw, FolderOpen, Image, Palette, Camera, UploadCloud, CheckCircle2, AlertCircle, Loader2, Video, Film, PlayCircle, Gamepad2, Globe, Laptop, Sparkles, Bot, Wand2, AlertTriangle, Bug, MessageSquare, Mic, Volume2, Music, Clock } from 'lucide-react';
 import { sound } from '../services/soundFx';
 import { isVideoContent, getYouTubeEmbedUrl, detectMediaType } from '../utils/media';
+
+/**
+ * Helper to process an uploaded audio or video file:
+ * - If video (mp4, webm, mov, etc.): extracts audio track into WAV data URL using client-side Web Audio
+ * - If audio (mp3, wav, m4a, ogg, etc.): reads as base64 data URL
+ */
+async function extractAudioFromFile(
+  file: File,
+  onProgress?: (msg: string) => void
+): Promise<string> {
+  if (file.type.startsWith('audio/')) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = () => reject(new Error('فشل قراءة ملف الصوت'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  onProgress?.('جاري استخراج مسار الصوت من الفيديو...');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('فشل قراءة ملف الفيديو'));
+    reader.onload = async (e) => {
+      try {
+        const arrayBuffer = e.target?.result as ArrayBuffer;
+        if (!arrayBuffer) throw new Error('الملف فارغ');
+
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as string);
+          r.readAsDataURL(file);
+          return;
+        }
+
+        const audioCtx = new AudioCtx();
+        const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+
+        // Limit duration to max 30 seconds
+        const sampleRate = decodedBuffer.sampleRate;
+        const numChannels = Math.min(2, decodedBuffer.numberOfChannels);
+        const maxSamples = Math.min(decodedBuffer.length, sampleRate * 30);
+        const bitDepth = 16;
+        const blockAlign = (numChannels * bitDepth) / 8;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = maxSamples * blockAlign;
+        const wavBuffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(wavBuffer);
+
+        const writeStr = (offset: number, str: string) => {
+          for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+        };
+
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitDepth, true);
+        writeStr(36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        const channels = [];
+        for (let c = 0; c < numChannels; c++) {
+          channels.push(decodedBuffer.getChannelData(c));
+        }
+
+        let offset = 44;
+        for (let i = 0; i < maxSamples; i++) {
+          for (let c = 0; c < numChannels; c++) {
+            let sample = channels[c][i];
+            sample = Math.max(-1, Math.min(1, sample));
+            const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+            view.setInt16(offset, intSample, true);
+            offset += 2;
+          }
+        }
+
+        audioCtx.close().catch(() => {});
+        const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+        const bReader = new FileReader();
+        bReader.onload = () => resolve(bReader.result as string);
+        bReader.onerror = () => reject(new Error('فشل ترميز الصوت'));
+        bReader.readAsDataURL(blob);
+      } catch {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result as string);
+        r.onerror = () => reject(new Error('فشل استخراج الصوت من الفيديو'));
+        r.readAsDataURL(file);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
 
 /**
  * Helper to process, downscale, and compress studio/device images to high-quality base64 JPEG
@@ -93,7 +194,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authError, setAuthError] = useState('');
-  const [activeTab, setActiveTab] = useState<'games' | 'sections' | 'topics' | 'questions' | 'barrah_categories' | 'reports' | 'export_import' | 'rooms'>('games');
+  const [activeTab, setActiveTab] = useState<'games' | 'sections' | 'topics' | 'questions' | 'barrah_categories' | 'mimic_sounds' | 'reports' | 'export_import' | 'rooms'>('games');
 
   // Games State
   const [gamesList, setGamesList] = useState<GameInfo[]>(games || JAMR_GAMES_CATALOG);
@@ -193,6 +294,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [reportFilter, setReportFilter] = useState<'all' | 'new' | 'investigating' | 'resolved'>('all');
   const [reportMsg, setReportMsg] = useState('');
 
+  // Mimic Sounds State (أصوات تقليد الأصوات)
+  const [mimicSoundsList, setMimicSoundsList] = useState<MimicSoundItem[]>(MIMIC_SOUNDS_BANK);
+  const [editingMimicSound, setEditingMimicSound] = useState<MimicSoundItem | null>(null);
+  const [mimicTitle, setMimicTitle] = useState('');
+  const [mimicCategory, setMimicCategory] = useState('ميمز وترند');
+  const [mimicDescription, setMimicDescription] = useState('');
+  const [mimicSoundType, setMimicSoundType] = useState('bark');
+  const [mimicAudioClipText, setMimicAudioClipText] = useState('');
+  const [mimicDurationSec, setMimicDurationSec] = useState<number>(4);
+  const [mimicAudioUrl, setMimicAudioUrl] = useState('');
+  const [mimicIcon, setMimicIcon] = useState('🎙️');
+  const [mimicMsg, setMimicMsg] = useState('');
+  const [mimicSearch, setMimicSearch] = useState('');
+  const [mimicExtractingAudio, setMimicExtractingAudio] = useState(false);
+  const [mimicExtractProgress, setMimicExtractProgress] = useState('');
+  const [mimicPreviewPlayingId, setMimicPreviewPlayingId] = useState<string | null>(null);
+  const mimicAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const mimicFileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadMimicSounds = async () => {
+    try {
+      const res = await fetch('/api/mimic/sounds');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.sounds)) {
+          setMimicSoundsList(data.sounds);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Load sections from API
   const loadSections = async () => {
     try {
@@ -267,6 +401,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     loadGames();
     loadSections();
     loadBarrahCategories();
+    loadMimicSounds();
     const saved = sessionStorage.getItem('jamr_admin_token');
     if (saved) {
       setAuthToken(saved);
@@ -292,6 +427,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         sessionStorage.setItem('jamr_admin_token', data.token);
         loadGames();
         loadBarrahCategories();
+        loadMimicSounds();
         loadReports(data.token);
       } else {
         sound.playWrong();
@@ -334,6 +470,154 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  // Mimic Sounds Handlers
+  const handleToggleMimicPreview = (soundItem: MimicSoundItem) => {
+    if (mimicPreviewPlayingId === soundItem.id) {
+      if (mimicAudioPlayerRef.current) {
+        mimicAudioPlayerRef.current.pause();
+      }
+      setMimicPreviewPlayingId(null);
+      return;
+    }
+
+    if (mimicAudioPlayerRef.current) {
+      mimicAudioPlayerRef.current.pause();
+    }
+
+    if (soundItem.audioUrl) {
+      const audio = new Audio(soundItem.audioUrl);
+      mimicAudioPlayerRef.current = audio;
+      setMimicPreviewPlayingId(soundItem.id);
+      audio.onended = () => setMimicPreviewPlayingId(null);
+      audio.onerror = () => {
+        sound.playMemeSound(soundItem.soundType);
+        setTimeout(() => setMimicPreviewPlayingId(null), 2500);
+      };
+      audio.play().catch(() => {
+        sound.playMemeSound(soundItem.soundType);
+        setTimeout(() => setMimicPreviewPlayingId(null), 2500);
+      });
+    } else {
+      sound.playMemeSound(soundItem.soundType);
+      setMimicPreviewPlayingId(soundItem.id);
+      setTimeout(() => setMimicPreviewPlayingId(null), (soundItem.targetDurationSec || 3) * 1000);
+    }
+  };
+
+  const handleMimicFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setMimicExtractingAudio(true);
+    setMimicExtractProgress(file.type.startsWith('video/') ? 'جاري استخراج مسار الصوت من الفيديو...' : 'جاري قراءة ملف الصوت...');
+
+    try {
+      const audioDataUrl = await extractAudioFromFile(file, (msg) => setMimicExtractProgress(msg));
+      setMimicAudioUrl(audioDataUrl);
+      if (!mimicTitle.trim()) {
+        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+        setMimicTitle(nameWithoutExt);
+      }
+      setMimicMsg('✨ تم استخراج الصوت بنجاح وجاهز للاستخدام في اللعبة!');
+      sound.playCorrect();
+    } catch (err: any) {
+      console.error(err);
+      setMimicMsg('فشل في معالجة الملف واستخراج الصوت: ' + (err.message || 'خطأ غير معروف'));
+      sound.playWrong();
+    } finally {
+      setMimicExtractingAudio(false);
+      setMimicExtractProgress('');
+      if (mimicFileInputRef.current) mimicFileInputRef.current.value = '';
+    }
+  };
+
+  const handleStartEditMimicSound = (item: MimicSoundItem) => {
+    sound.playClick();
+    setEditingMimicSound(item);
+    setMimicTitle(item.title);
+    setMimicCategory(item.category || 'ميمز وترند');
+    setMimicDescription(item.description || '');
+    setMimicSoundType(item.soundType || 'bark');
+    setMimicAudioClipText(item.audioClipText || '');
+    setMimicDurationSec(item.targetDurationSec || 4);
+    setMimicAudioUrl(item.audioUrl || '');
+    setMimicIcon(item.icon || '🎙️');
+    setMimicMsg('');
+    document.getElementById('mimic-sound-form')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleCancelEditMimicSound = () => {
+    setEditingMimicSound(null);
+    setMimicTitle('');
+    setMimicCategory('ميمز وترند');
+    setMimicDescription('');
+    setMimicSoundType('bark');
+    setMimicAudioClipText('');
+    setMimicDurationSec(4);
+    setMimicAudioUrl('');
+    setMimicIcon('🎙️');
+    setMimicMsg('');
+  };
+
+  const handleSaveMimicSound = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mimicTitle.trim()) {
+      setMimicMsg('يرجى كتابة اسم الصوت');
+      return;
+    }
+    sound.playClick();
+    try {
+      const url = editingMimicSound ? `/api/admin/mimic/sounds/${editingMimicSound.id}` : '/api/admin/mimic/sounds';
+      const method = editingMimicSound ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          title: mimicTitle.trim(),
+          category: mimicCategory,
+          description: mimicDescription.trim(),
+          soundType: mimicSoundType.trim() || 'bark',
+          audioClipText: mimicAudioClipText.trim() || mimicTitle.trim(),
+          targetDurationSec: Number(mimicDurationSec) || 4,
+          audioUrl: mimicAudioUrl.trim() || undefined,
+          icon: mimicIcon.trim() || '🎙️'
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        sound.playCorrect();
+        setMimicMsg('تم حفظ الصوت بنجاح!');
+        handleCancelEditMimicSound();
+        loadMimicSounds();
+      } else {
+        setMimicMsg(data.error || 'فشل حفظ الصوت');
+      }
+    } catch {
+      setMimicMsg('تعذر الاتصال بالخادم لحفظ الصوت');
+    }
+  };
+
+  const handleDeleteMimicSound = async (id: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذا الصوت من اللعبة؟')) return;
+    sound.playClick();
+    try {
+      const res = await fetch(`/api/admin/mimic/sounds/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        sound.playCorrect();
+        loadMimicSounds();
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -1152,6 +1436,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               >
                 <span className="text-sm">🕵️</span>
                 <span>أقسام برا السالفة ({barrahCategories.length})</span>
+              </button>
+
+              <button
+                onClick={() => { sound.playClick(); setActiveTab('mimic_sounds'); loadMimicSounds(); }}
+                className={`py-3 px-4 text-xs font-black border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                  activeTab === 'mimic_sounds'
+                    ? 'border-pink-500 text-pink-600 bg-white'
+                    : 'border-transparent text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Mic className="w-4 h-4 text-pink-500" />
+                <span>أصوات تقليد الأصوات ({mimicSoundsList.length})</span>
               </button>
 
               <button
@@ -2928,6 +3224,387 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </>
                       );
                     })()}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tab: Mimic Sounds Management (أصوات تقليد الأصوات) */}
+            {activeTab === 'mimic_sounds' && (
+              <div className="p-6 space-y-6">
+                
+                {/* Header & Quick Actions */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-pink-500/10 border border-pink-500/30 p-4 rounded-2xl">
+                  <div>
+                    <h3 className="text-sm font-black text-pink-300 flex items-center gap-2">
+                      <Mic className="w-5 h-5 text-pink-400" />
+                      <span>إدارة أصوات ومؤثرات لعبة تقليد الأصوات ({mimicSoundsList.length} صوت)</span>
+                    </h3>
+                    <p className="text-xs text-purple-200/80 mt-1">
+                      أضف أصوات وميمز جديدة، أو عدل القائمة الحالية. <span className="text-amber-300 font-bold">يمكنك رفع مقطع فيديو وسيتم استخراج الصوت منه تلقائياً دون الحاجة لتحويله لـ MP3!</span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        handleCancelEditMimicSound();
+                        document.getElementById('mimic-sound-form')?.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-black text-white bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 rounded-xl shadow-md transition-colors cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>إضافة صوت جديد</span>
+                    </button>
+                  </div>
+                </div>
+
+                {mimicMsg && (
+                  <div className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+                    mimicMsg.includes('نجاح')
+                      ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300'
+                      : 'bg-red-950/60 border-red-500/50 text-red-300'
+                  }`}>
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{mimicMsg}</span>
+                  </div>
+                )}
+
+                {/* ================= ADD / EDIT MIMIC SOUND FORM ================= */}
+                <div id="mimic-sound-form" className="bg-[#140620] border-2 border-pink-500/40 rounded-3xl p-5 sm:p-6 space-y-5 shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-purple-900/40 pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{editingMimicSound ? '✏️' : '🎙️'}</span>
+                      <h4 className="text-sm font-black text-white">
+                        {editingMimicSound ? `تعديل الصوت: "${editingMimicSound.title}"` : 'إضافة صوت ميم جديد للعبة'}
+                      </h4>
+                    </div>
+                    {editingMimicSound && (
+                      <button
+                        type="button"
+                        onClick={handleCancelEditMimicSound}
+                        className="text-xs text-purple-400 hover:text-white cursor-pointer underline"
+                      >
+                        إلغاء التعديل
+                      </button>
+                    )}
+                  </div>
+
+                  <form onSubmit={handleSaveMimicSound} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Title */}
+                      <div>
+                        <label className="block text-xs font-bold text-purple-200 mb-1">اسم الصوت / الميم:</label>
+                        <input
+                          type="text"
+                          value={mimicTitle}
+                          onChange={(e) => setMimicTitle(e.target.value)}
+                          placeholder="مثال: نباح الكلب المصدوم، ضحكة شريرة..."
+                          maxLength={80}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-white placeholder-purple-400/40 focus:outline-hidden focus:ring-1 focus:ring-pink-500"
+                        />
+                      </div>
+
+                      {/* Category */}
+                      <div>
+                        <label className="block text-xs font-bold text-purple-200 mb-1">فئة الصوت:</label>
+                        <select
+                          value={mimicCategory}
+                          onChange={(e) => setMimicCategory(e.target.value)}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-purple-200 focus:outline-hidden focus:ring-1 focus:ring-pink-500"
+                        >
+                          <option value="ميمز وترند">ميمز وترند 🔥</option>
+                          <option value="أصوات حيوانات">أصوات حيوانات 🐾</option>
+                          <option value="كرتون وأفلام">كرتون وأفلام 🎬</option>
+                          <option value="مواقف ومؤثرات">مواقف ومؤثرات 🎭</option>
+                          <option value="عام">عام 🌟</option>
+                        </select>
+                      </div>
+
+                      {/* Audio Clip Text */}
+                      <div>
+                        <label className="block text-xs font-bold text-purple-200 mb-1">المحاكاة النصية (الصرخة أو النص المعروض):</label>
+                        <input
+                          type="text"
+                          value={mimicAudioClipText}
+                          onChange={(e) => setMimicAudioClipText(e.target.value)}
+                          placeholder="مثال: آهاهاهاهاها! 🐶، تيت تييييت! 🚗"
+                          maxLength={100}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-white placeholder-purple-400/40 focus:outline-hidden focus:ring-1 focus:ring-pink-500"
+                        />
+                      </div>
+
+                      {/* Duration */}
+                      <div>
+                        <label className="block text-xs font-bold text-purple-200 mb-1">مدة التقليد (بالثواني):</label>
+                        <input
+                          type="number"
+                          min={3}
+                          max={15}
+                          value={mimicDurationSec}
+                          onChange={(e) => setMimicDurationSec(Number(e.target.value))}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-hidden focus:ring-1 focus:ring-pink-500"
+                        />
+                      </div>
+
+                      {/* Fallback Synth Sound Type */}
+                      <div>
+                        <label className="block text-xs font-bold text-purple-200 mb-1">نوع التوليد الصوتي الاصطناعي (احتياطي):</label>
+                        <select
+                          value={mimicSoundType}
+                          onChange={(e) => setMimicSoundType(e.target.value)}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-purple-200 focus:outline-hidden focus:ring-1 focus:ring-pink-500"
+                        >
+                          <option value="bark">نباح كلب (Bark)</option>
+                          <option value="meow">مواء قطة (Meow)</option>
+                          <option value="rooster">صياح ديك (Rooster)</option>
+                          <option value="car_horn">بوري سيارة (Car Horn)</option>
+                          <option value="laugh">ضحكة شريرة (Laugh)</option>
+                          <option value="scream">صرخة ميم (Scream)</option>
+                          <option value="boing">زنبرك كرتوني (Boing)</option>
+                          <option value="gasp">شهقة صدمة (Gasp)</option>
+                          <option value="siren">صفارة إنذار (Siren)</option>
+                        </select>
+                      </div>
+
+                      {/* Emoji Icon */}
+                      <div>
+                        <label className="block text-xs font-bold text-purple-200 mb-1">رمز تعبيري / أيقونة:</label>
+                        <input
+                          type="text"
+                          value={mimicIcon}
+                          onChange={(e) => setMimicIcon(e.target.value)}
+                          placeholder="🎙️ أو 🐶 أو 🚗..."
+                          maxLength={10}
+                          className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-hidden focus:ring-1 focus:ring-pink-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <label className="block text-xs font-bold text-purple-200 mb-1">وصف الصوت أو طريقة تقليده:</label>
+                      <textarea
+                        rows={2}
+                        value={mimicDescription}
+                        onChange={(e) => setMimicDescription(e.target.value)}
+                        placeholder="نبذة تساعد اللاعب على ضبط النغمة والتقليد بدقة..."
+                        className="w-full bg-black/60 border border-purple-700/60 rounded-xl px-3.5 py-2 text-xs text-white placeholder-purple-400/40 focus:outline-hidden focus:ring-1 focus:ring-pink-500 resize-none"
+                      />
+                    </div>
+
+                    {/* ================= VIDEO / AUDIO EXTRACTION BOX ================= */}
+                    <div className="p-4 rounded-2xl bg-black/40 border border-pink-500/30 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-black text-amber-300 flex items-center gap-1.5">
+                          <Film className="w-4 h-4 text-pink-400" />
+                          <span>رفع مقطع فيديو أو ملف صوت (استخراج الصوت الذكي):</span>
+                        </label>
+                        <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-bold">
+                          يدعم MP4, MOV, WebM, MP3, WAV
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-purple-200/80 leading-relaxed">
+                        اختر أي ملف فيديو من جهازك وسيقوم النظام <strong className="text-white">باستخراج مسار الصوت منه فورياً</strong> دون الحاجة لأي برامج تحويل!
+                      </p>
+
+                      <div className="flex flex-col sm:flex-row items-center gap-3">
+                        <input
+                          type="file"
+                          ref={mimicFileInputRef}
+                          accept="audio/*,video/*"
+                          onChange={handleMimicFileUpload}
+                          className="hidden"
+                        />
+                        
+                        <button
+                          type="button"
+                          disabled={mimicExtractingAudio}
+                          onClick={() => mimicFileInputRef.current?.click()}
+                          className="px-4 py-2.5 rounded-xl bg-purple-900/60 hover:bg-purple-800 border border-purple-600 text-xs font-black text-white flex items-center gap-2 cursor-pointer transition-all shadow-md shrink-0"
+                        >
+                          <Upload className="w-4 h-4 text-pink-400" />
+                          <span>{mimicExtractingAudio ? 'جاري الاستخراج والمعالجة...' : 'اختر ملف فيديو أو صوت 📁'}</span>
+                        </button>
+
+                        {mimicExtractProgress && (
+                          <div className="text-xs text-amber-300 flex items-center gap-2 font-bold animate-pulse">
+                            <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                            <span>{mimicExtractProgress}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Audio URL Input fallback & Preview */}
+                      <div className="pt-2 border-t border-purple-900/40 space-y-2">
+                        <label className="block text-xs font-bold text-purple-300">أو رابط صوت مباشر (URL / Data):</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={mimicAudioUrl}
+                            onChange={(e) => setMimicAudioUrl(e.target.value)}
+                            placeholder="https://example.com/sound.mp3 أو data:audio/..."
+                            className="flex-1 bg-black/60 border border-purple-700/60 rounded-xl px-3 py-1.5 text-xs text-purple-200 placeholder-purple-500/40 focus:outline-hidden font-mono"
+                          />
+                          {mimicAudioUrl && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleMimicPreview({
+                                  id: 'preview_temp',
+                                  title: mimicTitle || 'صوت تجريبي',
+                                  category: mimicCategory,
+                                  description: '',
+                                  soundType: mimicSoundType,
+                                  audioClipText: '',
+                                  targetDurationSec: mimicDurationSec,
+                                  audioUrl: mimicAudioUrl
+                                })}
+                                className="px-3 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-black text-xs flex items-center gap-1 cursor-pointer shrink-0"
+                              >
+                                <PlayCircle className="w-4 h-4" />
+                                <span>تجربة الصوت 🔊</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMimicAudioUrl('')}
+                                className="p-1.5 text-red-400 hover:text-red-300 rounded-xl bg-red-950/40 border border-red-800/40 cursor-pointer"
+                                title="حذف مسار الصوت"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Submit Form Button */}
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="submit"
+                        className="flex-1 py-3 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 text-white font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>{editingMimicSound ? 'حفظ التعديلات' : 'إضافة الصوت إلى اللعبة'}</span>
+                      </button>
+                      {editingMimicSound && (
+                        <button
+                          type="button"
+                          onClick={handleCancelEditMimicSound}
+                          className="px-4 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold text-xs rounded-xl cursor-pointer"
+                        >
+                          إلغاء
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                </div>
+
+                {/* ================= SOUNDS LIST / SEARCH ================= */}
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <h4 className="text-sm font-black text-white flex items-center gap-2">
+                      <span>قائمة الأصوات النشطة في اللعبة:</span>
+                      <span className="text-xs text-pink-400 font-mono">({mimicSoundsList.length})</span>
+                    </h4>
+
+                    {/* Search */}
+                    <div className="relative w-full sm:w-64">
+                      <input
+                        type="text"
+                        value={mimicSearch}
+                        onChange={(e) => setMimicSearch(e.target.value)}
+                        placeholder="بحث في الأصوات..."
+                        className="w-full bg-black/60 border border-purple-700/60 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-purple-400/40 focus:outline-hidden"
+                      />
+                      <Search className="w-3.5 h-3.5 text-purple-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* Sounds Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {mimicSoundsList
+                      .filter(s => {
+                        if (!mimicSearch.trim()) return true;
+                        const term = mimicSearch.toLowerCase();
+                        return (
+                          s.title.toLowerCase().includes(term) ||
+                          s.category.toLowerCase().includes(term) ||
+                          (s.description || '').toLowerCase().includes(term) ||
+                          (s.audioClipText || '').toLowerCase().includes(term)
+                        );
+                      })
+                      .map((soundItem) => {
+                        const isPlaying = mimicPreviewPlayingId === soundItem.id;
+
+                        return (
+                          <div
+                            key={soundItem.id}
+                            className={`p-4 rounded-2xl border transition-all text-right space-y-3 relative ${
+                              isPlaying
+                                ? 'bg-pink-950/40 border-pink-400 ring-2 ring-pink-500/40'
+                                : 'bg-black/40 border-purple-800/40 hover:border-purple-600'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-2xl">{soundItem.icon || '🎙️'}</span>
+                                <div>
+                                  <div className="text-xs font-black text-white">{soundItem.title}</div>
+                                  <span className="text-[10px] text-pink-300 font-bold bg-pink-500/20 px-2 py-0.5 rounded-full inline-block mt-0.5">
+                                    {soundItem.category}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditMimicSound(soundItem)}
+                                  className="p-1.5 rounded-lg text-purple-300 hover:text-white hover:bg-purple-900/60 cursor-pointer"
+                                  title="تعديل"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMimicSound(soundItem.id)}
+                                  className="p-1.5 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-950/50 cursor-pointer"
+                                  title="حذف"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <p className="text-[11px] text-purple-200/80 leading-snug line-clamp-2">
+                              {soundItem.description || soundItem.audioClipText}
+                            </p>
+
+                            <div className="pt-2 border-t border-purple-900/40 flex items-center justify-between text-[11px]">
+                              <span className="text-purple-300 font-mono flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-purple-400" />
+                                <span>{soundItem.targetDurationSec || 4} ثواني</span>
+                              </span>
+
+                              {/* Play Preview Button */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleMimicPreview(soundItem)}
+                                className={`px-2.5 py-1 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                                  isPlaying
+                                    ? 'bg-pink-500 text-white animate-pulse shadow-md shadow-pink-500/40'
+                                    : 'bg-purple-900/50 hover:bg-purple-800 text-purple-200 border border-purple-700/50'
+                                }`}
+                              >
+                                <Volume2 className="w-3.5 h-3.5" />
+                                <span>{isPlaying ? 'جاري التشغيل...' : 'استمع 🔊'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                   </div>
                 </div>
               </div>

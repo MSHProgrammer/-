@@ -231,14 +231,28 @@ export class LocalRoomCoordinator {
         break;
       }
 
+      case 'voice_signal': {
+        const { toPlayerId, signal } = msg;
+        if (toPlayerId) {
+          this.onMessage({ type: 'voice_signal', fromPlayerId: senderId, signal }, toPlayerId);
+        } else {
+          for (const p of this.room.players) {
+            if (p.id !== senderId) {
+              this.onMessage({ type: 'voice_signal', fromPlayerId: senderId, signal }, p.id);
+            }
+          }
+        }
+        break;
+      }
+
       case 'kick_player': {
         if (this.room.hostId === senderId) {
-          const { playerIdToKick } = msg;
-          const index = this.room.players.findIndex(x => x.id === playerIdToKick);
+          const targetId = msg.targetPlayerId || msg.playerIdToKick;
+          const index = this.room.players.findIndex(x => x.id === targetId);
           if (index !== -1) {
             const kicked = this.room.players[index];
             this.room.players.splice(index, 1);
-            this.onMessage({ type: 'kicked', message: 'تم استبعادك من الغرفة بواسطة المضيف.' }, playerIdToKick);
+            this.onMessage({ type: 'kicked', message: 'تم استبعادك من الغرفة بواسطة المضيف.' }, targetId);
             this.room.messages.push({
               id: 'sys_' + Date.now(),
               senderId: 'system',

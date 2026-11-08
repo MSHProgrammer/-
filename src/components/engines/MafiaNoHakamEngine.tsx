@@ -30,18 +30,16 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
   onOnlineAction,
   onExit
 }) => {
-  // Pre-game Player Roster Setup
+  // Pre-game Player Roster Setup (no hardcoded fake names)
   const [playerList, setPlayerList] = useState<Array<{ id: string; name: string; avatar: string }>>(() => {
-    if (players && players.length >= 3) {
+    if (players && players.length >= 4) {
       return players.map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '👤' }));
     }
-    return [
-      { id: 'p1', name: 'حمد', avatar: '🦁' },
-      { id: 'p2', name: 'محمد', avatar: '🦅' },
-      { id: 'p3', name: 'خالد', avatar: '🐺' },
-      { id: 'p4', name: 'سعد', avatar: '🐆' },
-      { id: 'p5', name: 'سلطان', avatar: '👑' }
-    ];
+    const savedName = (typeof window !== 'undefined' ? localStorage.getItem('jamr_player_name') : '') || '';
+    if (savedName.trim()) {
+      return [{ id: 'p1', name: savedName.trim(), avatar: '🔥' }];
+    }
+    return [];
   });
   const [newPlayerName, setNewPlayerName] = useState('');
 
@@ -357,9 +355,10 @@ export const MafiaNoHakamEngine: React.FC<MafiaNoHakamEngineProps> = ({
           {/* Start Role Reveal */}
           <button
             onClick={handleStartRoleDistribution}
-            className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 via-orange-600 to-red-600 hover:from-red-500 hover:to-orange-500 text-white font-black text-base shadow-xl shadow-red-600/30 cursor-pointer transition-transform active:scale-[0.98]"
+            disabled={playerList.length < 4}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 via-orange-600 to-red-600 hover:from-red-500 hover:to-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-base shadow-xl shadow-red-600/30 cursor-pointer transition-transform active:scale-[0.98]"
           >
-            توزيع الأدوار بالسر وبدء اللعبة ➔
+            {playerList.length < 4 ? `يجب إضافة 4 لاعبين على الأقل للمافيا (${playerList.length}/4)` : 'توزيع الأدوار بالسر وبدء اللعبة ➔'}
           </button>
         </div>
       )}

@@ -30,17 +30,16 @@ export const BarrahSalfaEngine: React.FC<BarrahSalfaProps> = ({
   onlineStatus,
   isHost
 }) => {
-  // Pre-game roster customization
+  // Pre-game roster customization (no hardcoded fake names)
   const [roster, setRoster] = useState<Array<{ id: string; name: string; avatar: string }>>(() => {
     if (initialPlayers && initialPlayers.length >= 3) {
       return initialPlayers.map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '👤' }));
     }
-    return [
-      { id: 'p1', name: 'حمد', avatar: '🦁' },
-      { id: 'p2', name: 'محمد', avatar: '🦅' },
-      { id: 'p3', name: 'خالد', avatar: '🐺' },
-      { id: 'p4', name: 'سعد', avatar: '🐆' }
-    ];
+    const savedName = (typeof window !== 'undefined' ? localStorage.getItem('jamr_player_name') : '') || '';
+    if (savedName.trim()) {
+      return [{ id: 'p1', name: savedName.trim(), avatar: '🔥' }];
+    }
+    return [];
   });
   const [newPlayerName, setNewPlayerName] = useState('');
 
@@ -445,10 +444,11 @@ export const BarrahSalfaEngine: React.FC<BarrahSalfaProps> = ({
           {/* Start Game Action */}
           <button
             onClick={handleStartGame}
-            className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-orange-500 hover:from-orange-400 hover:to-amber-400 text-black font-black text-base shadow-xl shadow-orange-500/30 cursor-pointer flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
+            disabled={roster.length < 3}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-orange-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-black text-base shadow-xl shadow-orange-500/30 cursor-pointer flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
           >
             <Sparkles className="w-5 h-5 text-black" />
-            <span>بدء توزيع الكروت بالسر 🔥</span>
+            <span>{roster.length < 3 ? `يجب إضافة 3 لاعبين على الأقل للبدء (${roster.length}/3)` : 'بدء توزيع الكروت بالسر 🔥'}</span>
           </button>
         </div>
       )}

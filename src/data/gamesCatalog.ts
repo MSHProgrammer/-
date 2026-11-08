@@ -171,10 +171,33 @@ export const JAMR_GAMES_CATALOG: GameInfo[] = [
     isPopular: true,
     isNew: true,
     isActive: true,
-    tags: ['أونلاين جماعي', 'رسم وتخمين', 'سلسلة تحولات', 'ألبوم مضحك', 'جمعات أصحاب'],
+    tags: ['رسم جماعي', 'تخمين', 'تلفزيون خربان', 'ضحك كوميدي'],
     supportsOffline: false,
     supportsOnline: true,
     engineType: 'broken_tv'
+  },
+  {
+    id: 'coming_soon_game',
+    title: 'لعبة جديدة 🔥 (قريباً)',
+    subtitle: 'ترقبوا أقوى وأحدث لعبة للجمعات والتحدي!',
+    category: 'party',
+    categoryLabel: 'قريباً جداً ⏳',
+    description: 'يتم الآن في كواليس جَمْر تجهيز لعبة جماعية مبتكرة وحصرية لإشعال أجواء جمعاتكم وديوانياتكم بالضحك والتحدي... انتظرونا قريباً!',
+    rules: ['اللعبة قيد التطوير والتجهيز حالياً لتكون بمستوى تطلعاتكم الأسطوري!'],
+    minPlayers: 3,
+    maxPlayers: 20,
+    durationMinutes: 'قريباً',
+    difficulty: 'حماسي',
+    icon: '⏳',
+    accentColor: '#f43f5e',
+    bgGradient: 'from-rose-600/30 via-red-950/40 to-black',
+    isPopular: false,
+    isNew: true,
+    isActive: true,
+    tags: ['قريباً جداً ⏳', 'لعبة جديدة', 'حماس وتشويق'],
+    supportsOffline: true,
+    supportsOnline: true,
+    engineType: 'coming_soon' as any
   }
 ];
 

@@ -1,11 +1,13 @@
 export interface MimicSoundItem {
   id: string;
   title: string;
-  category: 'ميمز وترند' | 'أصوات حيوانات' | 'كرتون وأفلام' | 'مواقف ومؤثرات';
+  category: 'ميمز وترند' | 'أصوات حيوانات' | 'كرتون وأفلام' | 'مواقف ومؤثرات' | string;
   description: string;
-  soundType: 'bark' | 'meow' | 'rooster' | 'car_horn' | 'laugh' | 'boing' | 'gasp' | 'scream';
-  audioClipText: string; // The famous iconic catchphrase or sound to mimic
+  soundType: 'bark' | 'meow' | 'rooster' | 'car_horn' | 'laugh' | 'boing' | 'gasp' | 'scream' | string;
+  audioClipText: string;
   targetDurationSec: number;
+  audioUrl?: string;
+  icon?: string;
 }
 
 export const MIMIC_SOUNDS_BANK: MimicSoundItem[] = [

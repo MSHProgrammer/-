@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Trophy, Clock, Star, Play, Award, RotateCcw, ArrowRight, Activity, Users, ThumbsUp, Sparkles, Radio, MessageSquare } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, Trophy, Clock, Star, Play, Award, RotateCcw, ArrowRight, Activity, Users, ThumbsUp, Sparkles, Radio, MessageSquare, AlertCircle, Plus, Trash2, CheckCircle2 } from 'lucide-react';
 import { sound } from '../../services/soundFx';
 import confetti from 'canvas-confetti';
 import { Player } from '../../types/game';
@@ -9,94 +9,387 @@ interface SoundMimicEngineProps {
   mode: 'online' | 'offline';
   players: Player[];
   onlineRoomData?: any;
+  myPlayerId?: string;
+  socket?: any;
   onOnlineScore?: (score: number) => void;
   onExit: () => void;
 }
 
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
+  ]
+};
+
 export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
   mode,
-  players,
+  players: initialPlayers,
   onlineRoomData,
+  myPlayerId,
+  socket,
   onOnlineScore,
   onExit
 }) => {
-  const [currentRound, setCurrentRound] = useState(1);
-  const totalRounds = Math.max(3, players.length);
-  const [activePlayerIdx, setActivePlayerIdx] = useState(0);
+  // Roster setup for offline or passed players
+  const [activePlayers, setActivePlayers] = useState<Player[]>(() => {
+    if (initialPlayers && initialPlayers.length >= 2) {
+      return initialPlayers;
+    }
+    const savedName = (typeof window !== 'undefined' ? localStorage.getItem('jamr_player_name') : '') || '';
+    if (savedName.trim()) {
+      return [{ id: 'p1', name: savedName.trim(), avatar: '🔥', score: 0 }];
+    }
+    return [];
+  });
+  const [newPlayerName, setNewPlayerName] = useState('');
+  const [isGameStarted, setIsGameStarted] = useState<boolean>(() => {
+    return initialPlayers && initialPlayers.length >= 2;
+  });
 
-  // Active Sound Item
+  // Sounds Library
+  const [soundsList, setSoundsList] = useState<MimicSoundItem[]>(MIMIC_SOUNDS_BANK);
   const [currentSound, setCurrentSound] = useState<MimicSoundItem>(MIMIC_SOUNDS_BANK[0]);
   const [isPlayingDemo, setIsPlayingDemo] = useState(false);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+
+  // Match State
+  const [currentRound, setCurrentRound] = useState(1);
+  const totalRounds = Math.max(3, activePlayers.length || 3);
+  const [activePlayerIdx, setActivePlayerIdx] = useState(0);
 
   // Turn Stages: 'demo_listen' -> 'countdown' -> 'mimicking' -> 'voting' -> 'turn_score' -> 'match_over'
   const [stage, setStage] = useState<'demo_listen' | 'countdown' | 'mimicking' | 'voting' | 'turn_score' | 'match_over'>('demo_listen');
   const [countdownNum, setCountdownNum] = useState(3);
   const [mimicTimer, setMimicTimer] = useState(6);
 
-  // Voting
+  // Voting & Scoring
   const [ratings, setRatings] = useState<Record<string, number>>({});
   const [myRating, setMyRating] = useState(75);
   const [playerScores, setPlayerScores] = useState<Record<string, number>>({});
 
-  // Voice Chat Feature State
-  // Requirement: "اضف محادثة صوتية في تقليد الاصوات ولكن تنطفئ المحادثة عندما يقلد شخص الصوت وترجع بعد انتهائه"
+  // Voice Chat Real WebRTC State
   const [myMicEnabled, setMyMicEnabled] = useState(true);
-  const [simulatedTalkingMap, setSimulatedTalkingMap] = useState<Record<string, boolean>>({});
+  const [micPermissionGranted, setMicPermissionGranted] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [speakingLevels, setSpeakingLevels] = useState<Record<string, number>>({}); // 0 to 100
+
+  // System Mute Rule: Mute everyone during countdown & mimicking
   const isVoiceMutedBySystem = stage === 'countdown' || stage === 'mimicking';
   const prevMuteRef = useRef(isVoiceMutedBySystem);
 
-  // Monitor voice chat mute/unmute transition
+  // WebRTC References
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const remoteAudioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const analyserMapRef = useRef<Map<string, AnalyserNode>>(new Map());
+
+  // Effective current player ID
+  const effectiveMyPlayerId = myPlayerId || (activePlayers[0]?.id ?? 'me');
+
+  // Load latest mimic sounds from API
   useEffect(() => {
+    fetch('/api/mimic/sounds')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && Array.isArray(data.sounds) && data.sounds.length > 0) {
+          setSoundsList(data.sounds);
+          setCurrentSound(data.sounds[0]);
+        }
+      })
+      .catch(() => {
+        // Fall back to default sounds bank
+      });
+  }, []);
+
+  // Sync players prop if updated externally
+  useEffect(() => {
+    if (initialPlayers && initialPlayers.length >= 2) {
+      setActivePlayers(initialPlayers);
+      setIsGameStarted(true);
+    }
+  }, [initialPlayers]);
+
+  // Request real microphone on mount
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function initMicrophone() {
+      try {
+        if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+          setMicError('المتصفح لا يدعم الوصول المباشر للمايكروفون');
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        if (isCancelled) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+
+        localStreamRef.current = stream;
+        setMicPermissionGranted(true);
+        setMicError(null);
+
+        // Setup Audio Analyser for local voice metering
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          audioContextRef.current = ctx;
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          analyserMapRef.current.set(effectiveMyPlayerId, analyser);
+        }
+      } catch (err: any) {
+        if (!isCancelled) {
+          setMicPermissionGranted(false);
+          setMicError('المايكروفون غير مفعل أو تم رفض الإذن. يمكنك التفعيل للمشاركة بالصوت.');
+        }
+      }
+    }
+
+    initMicrophone();
+
+    return () => {
+      isCancelled = true;
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => {});
+      }
+      peerConnectionsRef.current.forEach(pc => pc.close());
+      peerConnectionsRef.current.clear();
+      remoteAudioElementsRef.current.forEach(audio => {
+        audio.pause();
+        audio.srcObject = null;
+      });
+      remoteAudioElementsRef.current.clear();
+    };
+  }, [effectiveMyPlayerId]);
+
+  // Handle System Auto-Mute & User Toggle
+  useEffect(() => {
+    if (!localStreamRef.current) return;
+
+    const audioTracks = localStreamRef.current.getAudioTracks();
+    const shouldLocalTrackBeActive = myMicEnabled && !isVoiceMutedBySystem;
+
+    audioTracks.forEach(track => {
+      track.enabled = shouldLocalTrackBeActive;
+    });
+
+    // Mute/Unmute all remote peer audio elements during mimic countdown & turn
+    remoteAudioElementsRef.current.forEach(audioEl => {
+      audioEl.muted = isVoiceMutedBySystem;
+    });
+
+    // Sound alerts when transition occurs
     if (prevMuteRef.current !== isVoiceMutedBySystem) {
       if (isVoiceMutedBySystem) {
-        sound.playWrong(); // subtle alert that voice chat is turned off
+        sound.playWrong(); // alert that voice chat is shut down
       } else {
-        sound.playTileSelect(); // sound notification that voice chat is back on!
+        sound.playTileSelect(); // celebratory ping that voice chat is restored!
       }
       prevMuteRef.current = isVoiceMutedBySystem;
     }
-  }, [isVoiceMutedBySystem]);
+  }, [isVoiceMutedBySystem, myMicEnabled]);
 
-  // Simulated voice chat activity when active (speech waves)
+  // Monitor speaking volume in real-time
   useEffect(() => {
-    if (isVoiceMutedBySystem) {
-      // All other players are muted
-      setSimulatedTalkingMap({});
-      return;
-    }
-
     const interval = setInterval(() => {
-      const map: Record<string, boolean> = {};
-      players.forEach(p => {
-        // Randomly simulate who is talking in the room when voice chat is open
-        map[p.id] = Math.random() > 0.45;
+      if (isVoiceMutedBySystem) {
+        setSpeakingLevels({});
+        return;
+      }
+
+      const levels: Record<string, number> = {};
+      const dataArray = new Uint8Array(128);
+
+      analyserMapRef.current.forEach((analyser, pId) => {
+        try {
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / dataArray.length;
+          // Scale to 0-100 with threshold
+          const level = avg > 12 ? Math.min(100, Math.round((avg - 12) * 2.5)) : 0;
+          levels[pId] = level;
+        } catch {}
       });
-      setSimulatedTalkingMap(map);
-    }, 1200);
+
+      setSpeakingLevels(levels);
+    }, 120);
 
     return () => clearInterval(interval);
-  }, [isVoiceMutedBySystem, players]);
+  }, [isVoiceMutedBySystem]);
+
+  // WebRTC Mesh with Socket Signaling
+  useEffect(() => {
+    if (!socket || mode !== 'online') return;
+
+    // Helper to create or retrieve peer connection
+    const getOrCreatePeerConnection = (targetPlayerId: string): RTCPeerConnection => {
+      let pc = peerConnectionsRef.current.get(targetPlayerId);
+      if (pc && pc.connectionState !== 'closed' && pc.connectionState !== 'failed') {
+        return pc;
+      }
+
+      pc = new RTCPeerConnection(ICE_SERVERS);
+      peerConnectionsRef.current.set(targetPlayerId, pc);
+
+      // Add local audio tracks to peer connection
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          pc?.addTrack(track, localStreamRef.current!);
+        });
+      }
+
+      // Handle ICE candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.send({
+            type: 'voice_signal',
+            toPlayerId: targetPlayerId,
+            signal: { candidate: event.candidate }
+          });
+        }
+      };
+
+      // Handle remote incoming audio track
+      pc.ontrack = (event) => {
+        const [remoteStream] = event.streams;
+        if (!remoteStream) return;
+
+        let audioEl = remoteAudioElementsRef.current.get(targetPlayerId);
+        if (!audioEl) {
+          audioEl = document.createElement('audio');
+          audioEl.autoplay = true;
+          audioEl.setAttribute('playsinline', 'true');
+          document.body.appendChild(audioEl);
+          remoteAudioElementsRef.current.set(targetPlayerId, audioEl);
+        }
+        audioEl.srcObject = remoteStream;
+        audioEl.muted = isVoiceMutedBySystem;
+
+        // Route remote stream to AudioContext analyser to detect their volume!
+        try {
+          if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+            const source = audioContextRef.current.createMediaStreamSource(remoteStream);
+            const analyser = audioContextRef.current.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            analyserMapRef.current.set(targetPlayerId, analyser);
+          }
+        } catch {}
+      };
+
+      return pc;
+    };
+
+    // Initiate offers to peers with higher ID to avoid double-offer collisions
+    activePlayers.forEach(p => {
+      if (p.id !== effectiveMyPlayerId && effectiveMyPlayerId > p.id) {
+        const pc = getOrCreatePeerConnection(p.id);
+        pc.createOffer()
+          .then(offer => pc.setLocalDescription(offer))
+          .then(() => {
+            socket.send({
+              type: 'voice_signal',
+              toPlayerId: p.id,
+              signal: { sdp: pc.localDescription }
+            });
+          })
+          .catch(() => {});
+      }
+    });
+
+    // Subscribe to incoming voice signals
+    const unsubscribe = socket.subscribe(async (msg: any) => {
+      if (msg.type !== 'voice_signal') return;
+      const { fromPlayerId, signal } = msg;
+      if (!fromPlayerId || fromPlayerId === effectiveMyPlayerId) return;
+
+      const pc = getOrCreatePeerConnection(fromPlayerId);
+
+      try {
+        if (signal?.sdp) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          if (signal.sdp.type === 'offer') {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.send({
+              type: 'voice_signal',
+              toPlayerId: fromPlayerId,
+              signal: { sdp: pc.localDescription }
+            });
+          }
+        } else if (signal?.candidate) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        }
+      } catch (e) {
+        console.error('WebRTC signal handling error:', e);
+      }
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [socket, mode, activePlayers, effectiveMyPlayerId, isVoiceMutedBySystem]);
 
   // Pick random sound per turn
   useEffect(() => {
-    const s = MIMIC_SOUNDS_BANK[Math.floor(Math.random() * MIMIC_SOUNDS_BANK.length)] || MIMIC_SOUNDS_BANK[0];
+    if (!isGameStarted || soundsList.length === 0) return;
+    const s = soundsList[Math.floor(Math.random() * soundsList.length)] || soundsList[0];
     setCurrentSound(s);
     setStage('demo_listen');
     setCountdownNum(3);
     setRatings({});
     setMyRating(75);
-  }, [activePlayerIdx, currentRound]);
+  }, [activePlayerIdx, currentRound, isGameStarted, soundsList]);
 
-  // Demo audio play
+  // Play Authentic Demo Audio (Real Audio URL or Rich Synth Sound)
   const handlePlayDemo = () => {
     setIsPlayingDemo(true);
-    sound.playMemeSound(currentSound.soundType);
-    setTimeout(() => {
-      setIsPlayingDemo(false);
-    }, (currentSound.targetDurationSec || 3) * 1000);
+
+    if (currentSound.audioUrl) {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+      }
+      const audio = new Audio(currentSound.audioUrl);
+      audioPlayerRef.current = audio;
+      audio.onended = () => setIsPlayingDemo(false);
+      audio.onerror = () => {
+        // Fallback to synthesized meme sound
+        sound.playMemeSound(currentSound.soundType);
+        setTimeout(() => setIsPlayingDemo(false), 2500);
+      };
+      audio.play().catch(() => {
+        sound.playMemeSound(currentSound.soundType);
+        setTimeout(() => setIsPlayingDemo(false), 2500);
+      });
+    } else {
+      sound.playMemeSound(currentSound.soundType);
+      setTimeout(() => {
+        setIsPlayingDemo(false);
+      }, (currentSound.targetDurationSec || 3) * 1000);
+    }
   };
 
-  // Start Mimic Turn (Countdown 3 -> 2 -> 1 -> GO)
+  // Turn Flow
   const handleStartCountdown = () => {
     sound.playMicBeep(false);
     setStage('countdown');
@@ -118,9 +411,10 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
 
   const startMimicAction = () => {
     setStage('mimicking');
-    setMimicTimer(currentSound.targetDurationSec || 5);
+    const duration = currentSound.targetDurationSec || 5;
+    setMimicTimer(duration);
 
-    let t = currentSound.targetDurationSec || 5;
+    let t = duration;
     const timerInt = setInterval(() => {
       t -= 1;
       setMimicTimer(t);
@@ -132,14 +426,12 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
     }, 1000);
   };
 
-  // Submit Rating (0 to 100)
   const handleSubmitRating = () => {
     sound.playClick();
-    const currPlayer = players[activePlayerIdx] || players[0];
-    const newRatings = { ...ratings, ['judge_1']: myRating };
+    const currPlayer = activePlayers[activePlayerIdx] || activePlayers[0];
+    const newRatings = { ...ratings, [effectiveMyPlayerId]: myRating };
     setRatings(newRatings);
 
-    // Calculate average
     const scoreVals = Object.values(newRatings);
     const avg = Math.round(scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length);
 
@@ -147,6 +439,10 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
       ...prev,
       [currPlayer.id]: (prev[currPlayer.id] || 0) + avg
     }));
+
+    if (onOnlineScore) {
+      onOnlineScore(avg);
+    }
 
     if (avg >= 70) {
       sound.playCorrect();
@@ -160,7 +456,7 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
 
   const handleNextTurn = () => {
     sound.playClick();
-    if (activePlayerIdx + 1 < players.length) {
+    if (activePlayerIdx + 1 < activePlayers.length) {
       setActivePlayerIdx(i => i + 1);
     } else if (currentRound < totalRounds) {
       setCurrentRound(r => r + 1);
@@ -171,7 +467,126 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
     }
   };
 
-  const activePlayer = players[activePlayerIdx] || players[0];
+  // Offline player roster helpers
+  const handleAddPlayer = () => {
+    const clean = newPlayerName.trim();
+    if (!clean) return;
+    if (activePlayers.some(p => p.name.trim().toLowerCase() === clean.toLowerCase())) {
+      alert('الاسم مضاف مسبقاً!');
+      return;
+    }
+    sound.playClick();
+    const avatars = ['🔥', '⚡', '👑', '💎', '🎯', '🌟', '🚀', '🦁', '🦊', '🎨'];
+    const av = avatars[activePlayers.length % avatars.length];
+    setActivePlayers(prev => [...prev, { id: 'p_' + Date.now(), name: clean, avatar: av, score: 0 }]);
+    setNewPlayerName('');
+  };
+
+  const handleRemovePlayer = (id: string) => {
+    sound.playClick();
+    setActivePlayers(prev => prev.filter(p => p.id !== id));
+  };
+
+  const activePlayer = activePlayers[activePlayerIdx] || activePlayers[0] || { name: 'المقلد', avatar: '🎙️', id: 'p1' };
+
+  // =========================================================================
+  // VIEW: OFFLINE PRE-GAME ROSTER SELECTION (NO FAKE NAMES)
+  // =========================================================================
+  if (!isGameStarted) {
+    return (
+      <div className="max-w-2xl mx-auto p-6 bg-[#160624] border-2 border-pink-500/50 rounded-3xl space-y-6 text-right select-none shadow-2xl">
+        <div className="flex items-center justify-between border-b border-purple-900/60 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-pink-500/20 border border-pink-500/50 flex items-center justify-center text-2xl">
+              🎙️
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-white">إعداد لاعبي تقليد الأصوات</h2>
+              <p className="text-xs text-pink-300">أضف أسماء أصدقائك الحقيقيين للبدء (لاعبين على الأقل)</p>
+            </div>
+          </div>
+          <button onClick={onExit} className="text-xs text-purple-400 hover:text-white cursor-pointer underline">
+            خروج
+          </button>
+        </div>
+
+        {/* Add Player Input */}
+        <div className="space-y-3">
+          <label className="block text-xs font-bold text-purple-200">أضف لاعب جديد:</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newPlayerName}
+              onChange={(e) => setNewPlayerName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddPlayer(); }}
+              placeholder="اكتب اسم اللاعب (مثلاً: فهد)..."
+              maxLength={18}
+              className="flex-1 bg-black/60 border border-purple-700/60 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-hidden focus:ring-2 focus:ring-pink-500"
+            />
+            <button
+              onClick={handleAddPlayer}
+              disabled={!newPlayerName.trim()}
+              className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-orange-500 disabled:opacity-40 hover:from-pink-400 hover:to-orange-400 text-white font-black text-xs rounded-xl flex items-center gap-1 cursor-pointer transition-all shadow-md"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إضافة</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Players List */}
+        <div className="space-y-2">
+          <div className="text-xs font-bold text-purple-300 flex items-center justify-between">
+            <span>اللاعبون المسجلون ({activePlayers.length}/2 كحد أدنى):</span>
+            {activePlayers.length < 2 && (
+              <span className="text-amber-400 text-[11px] font-medium">يلزم إضافة {2 - activePlayers.length} لاعب إضافي للبدء</span>
+            )}
+          </div>
+
+          {activePlayers.length === 0 ? (
+            <div className="p-8 text-center text-purple-400/60 border-2 border-dashed border-purple-900/50 rounded-2xl text-xs">
+              لم تتم إضافة أي لاعب بعد. اكتب الاسم واضغط إضافة!
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {activePlayers.map((p, idx) => (
+                <div
+                  key={p.id}
+                  className="p-3 rounded-2xl bg-black/40 border border-purple-800/50 flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xl">{p.avatar || '👤'}</span>
+                    <div>
+                      <div className="text-sm font-black text-white">{p.name}</div>
+                      <div className="text-[10px] text-pink-300">اللاعب #{idx + 1}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleRemovePlayer(p.id)}
+                    className="p-1.5 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-950/40 cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Start Game Button */}
+        <button
+          onClick={() => {
+            sound.playVictory();
+            setIsGameStarted(true);
+          }}
+          disabled={activePlayers.length < 2}
+          className="w-full py-4 rounded-2xl font-black text-base shadow-xl transition-all cursor-pointer bg-gradient-to-r from-pink-500 via-rose-500 to-orange-500 hover:scale-[1.01] text-white disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {activePlayers.length >= 2 ? 'ابدأ تحدي تقليد الأصوات 🎙️🔥' : `أضف لاعباً آخر للبدء (${activePlayers.length}/2)`}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl mx-auto space-y-5 text-right pb-14 font-sans select-none">
@@ -183,8 +598,8 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
             🎙️
           </div>
           <div>
-            <div className="text-sm font-black text-white">تقليد الأصوات (ميميك بارتي)</div>
-            <div className="text-xs text-pink-300 font-bold">استمع للصوت، قلّده بدقة، والجمهور يقيّم!</div>
+            <div className="text-sm font-black text-white">تقليد الأصوات الحقيقي (ميميك بارتي)</div>
+            <div className="text-xs text-pink-300 font-bold">دردشة صوتية مباشرة وأصوات حقيقية مع هدوء تام عند التقليد!</div>
           </div>
         </div>
 
@@ -196,8 +611,16 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
         </button>
       </div>
 
+      {/* Mic error / warning banner if permissions denied */}
+      {micError && (
+        <div className="p-3 rounded-2xl bg-amber-950/60 border border-amber-500/50 text-xs text-amber-200 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{micError}</span>
+        </div>
+      )}
+
       {/* ========================================================================= */}
-      {/* VOICE CHAT BAR (محادثة صوتية ذكية تنطفئ أثناء التقليد وترجع بعده)         */}
+      {/* REAL VOICE CHAT BAR (محادثة صوتية حقيقية تنطفئ أثناء التقليد وترجع بعده)  */}
       {/* ========================================================================= */}
       <div className={`p-4 rounded-3xl border-2 transition-all shadow-xl space-y-3 ${
         isVoiceMutedBySystem
@@ -220,19 +643,19 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
                 <span className="text-xs font-black text-white">
                   {isVoiceMutedBySystem
                     ? '🔴 انطفأت المحادثة الصوتية للجميع تلقائياً (هدوء تام على المسرح)'
-                    : '🟢 المحادثة الصوتية نشطة ومفتوحة للجميع'}
+                    : '🟢 المحادثة الصوتية الحقيقية نشطة ومفتوحة للجميع'}
                 </span>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
                   isVoiceMutedBySystem
                     ? 'bg-red-600 text-white animate-pulse'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                 }`}>
-                  {isVoiceMutedBySystem ? 'كتم عام' : 'مباشر 🎙️'}
+                  {isVoiceMutedBySystem ? 'كتم عام' : 'مباشر صوتياً 🎙️'}
                 </span>
               </div>
               <p className="text-[11px] text-purple-200/90 leading-tight mt-0.5">
                 {isVoiceMutedBySystem
-                  ? `المايكروفونات مقفلة حتى ينتهي ${activePlayer.name} من تقليد الصوت، وسترجع فوراً بعده!`
+                  ? `المايكروفونات مغلقة حتى ينتهي ${activePlayer.name} من تقليد الصوت، وسترجع فوراً بعده!`
                   : 'تحدثوا وتناقشوا بحرية وشاركوا الضحك أثناء الاستماع والتقييم!'}
               </p>
             </div>
@@ -274,11 +697,12 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
           </div>
         </div>
 
-        {/* Room Participants Voice Strip */}
+        {/* Room Participants Voice Strip with Real Volume Meters */}
         <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-purple-900/40 scrollbar-none">
-          {players.map((p) => {
+          {activePlayers.map((p) => {
             const isMimicker = p.id === activePlayer.id;
-            const isTalking = !isVoiceMutedBySystem && !!simulatedTalkingMap[p.id];
+            const volumeLevel = speakingLevels[p.id] || 0;
+            const isTalking = !isVoiceMutedBySystem && volumeLevel > 15;
 
             return (
               <div
@@ -289,14 +713,14 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
                     : isVoiceMutedBySystem
                     ? 'bg-black/40 border-purple-900/30 text-gray-500 opacity-60'
                     : isTalking
-                    ? 'bg-emerald-950/40 border-emerald-500/60 text-emerald-200 ring-1 ring-emerald-400/30'
+                    ? 'bg-emerald-950/60 border-emerald-400 text-emerald-200 ring-2 ring-emerald-400/60 shadow-lg shadow-emerald-500/20'
                     : 'bg-black/30 border-purple-800/30 text-purple-200'
                 }`}
               >
                 <span className="text-sm">{p.avatar || '👤'}</span>
                 <span className="truncate max-w-[90px]">{p.name}</span>
 
-                {/* Mic Status Icon */}
+                {/* Real Sound Wave / Mic Status */}
                 {isMimicker && stage === 'mimicking' ? (
                   <span className="text-[10px] text-pink-300 font-mono flex items-center gap-0.5">
                     <Mic className="w-3 h-3 text-pink-400 animate-bounce" />
@@ -305,7 +729,11 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
                 ) : isVoiceMutedBySystem ? (
                   <MicOff className="w-3 h-3 text-red-400" />
                 ) : isTalking ? (
-                  <Activity className="w-3 h-3 text-emerald-400 animate-pulse" />
+                  <div className="flex items-center gap-0.5">
+                    <span className="w-1 h-3 bg-emerald-400 rounded-full animate-pulse" />
+                    <span className="w-1 h-4 bg-emerald-300 rounded-full animate-bounce" />
+                    <span className="w-1 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                  </div>
                 ) : (
                   <Mic className="w-3 h-3 text-purple-400 opacity-60" />
                 )}
@@ -329,7 +757,7 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
             </div>
 
             <div className="text-xs font-black text-purple-300 bg-purple-950/60 px-3 py-1 rounded-full border border-purple-800/50">
-              الجولة {currentRound} · الدور {activePlayerIdx + 1} من {players.length}
+              الجولة {currentRound} · الدور {activePlayerIdx + 1} من {activePlayers.length}
             </div>
           </div>
 
@@ -361,10 +789,10 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
               <button
                 disabled={isPlayingDemo || stage === 'mimicking'}
                 onClick={handlePlayDemo}
-                className="px-6 py-2.5 rounded-xl bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-700 font-bold text-xs flex items-center gap-2 cursor-pointer"
+                className="px-6 py-2.5 rounded-xl bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-700 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-lg transition-transform active:scale-95"
               >
                 <Volume2 className="w-4 h-4 text-pink-400" />
-                <span>{isPlayingDemo ? 'جاري الاستماع...' : 'استمع للصوت الأصلي 🔊'}</span>
+                <span>{isPlayingDemo ? 'جاري تشغيل الصوت الأصلي...' : 'استمع للصوت الأصلي 🔊'}</span>
               </button>
             </div>
           </div>
@@ -374,7 +802,7 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
             <div className="space-y-4 pt-2">
               <button
                 onClick={handleStartCountdown}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-orange-500 hover:from-pink-400 hover:to-orange-400 text-white font-black text-base shadow-xl shadow-pink-500/30 flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-orange-500 hover:from-pink-400 hover:to-orange-400 text-white font-black text-base shadow-xl shadow-pink-500/30 flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-98"
               >
                 <Mic className="w-5 h-5" />
                 <span>جاهز للتقليد! ابدأ العد التنازلي ➔</span>
@@ -477,7 +905,7 @@ export const SoundMimicEngine: React.FC<SoundMimicEngineProps> = ({
           <div className="text-xs text-purple-300 font-bold">لوحة صدارة مقلدي الأصوات والميمز</div>
 
           <div className="max-w-md mx-auto space-y-2">
-            {players
+            {activePlayers
               .slice()
               .sort((a, b) => (playerScores[b.id] || 0) - (playerScores[a.id] || 0))
               .map((p, idx) => (

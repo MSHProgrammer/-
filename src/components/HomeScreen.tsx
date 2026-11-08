@@ -35,6 +35,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showComingSoonModal, setShowComingSoonModal] = useState(false);
   const [selectedCreateGameId, setSelectedCreateGameId] = useState('barrah_salfa');
   const [joinError, setJoinError] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'offline' | 'online'>('all');
@@ -339,31 +340,46 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
               {/* Action Buttons */}
               <div className="pt-4 border-t border-purple-900/40 flex flex-col gap-2">
-                {game.supportsOffline && (
+                {game.id === 'coming_soon_game' ? (
                   <button
                     onClick={() => {
-                      sound.playClick();
-                      onSelectGame(game, 'offline');
+                      sound.playTileSelect();
+                      setShowComingSoonModal(true);
                     }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-black text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-rose-600 via-pink-600 to-amber-500 hover:scale-[1.02] active:scale-95 text-white font-black text-xs shadow-lg shadow-rose-500/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <Play className="w-3.5 h-3.5 fill-black" />
-                    <span>العب محلياً على جهاز واحد</span>
+                    <Sparkles className="w-4 h-4 fill-white" />
+                    <span>ترقبوا اللعبة الجديدة قريباً! 🔥</span>
                   </button>
-                )}
+                ) : (
+                  <>
+                    {game.supportsOffline && (
+                      <button
+                        onClick={() => {
+                          sound.playClick();
+                          onSelectGame(game, 'offline');
+                        }}
+                        className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-black text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-black" />
+                        <span>العب محلياً على جهاز واحد</span>
+                      </button>
+                    )}
 
-                {game.supportsOnline && (
-                  <button
-                    onClick={() => {
-                      sound.playClick();
-                      setSelectedCreateGameId(game.id);
-                      onCreateOnlineRoom(game.id);
-                    }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-purple-950/80 hover:bg-purple-900 text-purple-200 hover:text-white border border-purple-700/50 font-bold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Globe className="w-3.5 h-3.5 text-purple-400" />
-                    <span>إنشاء غرفة أونلاين</span>
-                  </button>
+                    {game.supportsOnline && (
+                      <button
+                        onClick={() => {
+                          sound.playClick();
+                          setSelectedCreateGameId(game.id);
+                          onCreateOnlineRoom(game.id);
+                        }}
+                        className="w-full py-2.5 px-4 rounded-xl bg-purple-950/80 hover:bg-purple-900 text-purple-200 hover:text-white border border-purple-700/50 font-bold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Globe className="w-3.5 h-3.5 text-purple-400" />
+                        <span>إنشاء غرفة أونلاين</span>
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -491,6 +507,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== COMING SOON HYPE MODAL ===================== */}
+      {showComingSoonModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-gradient-to-b from-[#240a28] via-[#16061b] to-[#09020b] rounded-3xl max-w-md w-full p-6 sm:p-8 border-2 border-rose-500/60 shadow-2xl text-center space-y-5 animate-in zoom-in-95">
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/20 border-2 border-rose-500/40 flex items-center justify-center text-3xl mx-auto shadow-lg shadow-rose-500/20">
+              ⏳
+            </div>
+            <div>
+              <span className="text-[11px] font-black text-rose-400 uppercase tracking-widest bg-rose-500/10 px-3 py-1 rounded-full border border-rose-500/30">
+                تحديث ضخم قادم
+              </span>
+              <h3 className="text-2xl font-black text-white mt-2">لعبة جديدة قادمة في جَمْر! 🔥</h3>
+            </div>
+            <p className="text-xs sm:text-sm text-purple-200/80 leading-relaxed">
+              يتم الآن في كواليس جَمْر تجهيز واختبار لعبة جماعية حصرية ومبتكرة ستشعل أجواء جمعاتكم وديوانياتكم بالمزيد من الحماس والتحدي والضحك!
+            </p>
+            <div className="p-4 rounded-2xl bg-black/50 border border-purple-900/50 text-xs text-amber-300 font-bold flex items-center justify-center gap-2">
+              <Flame className="w-4 h-4 text-orange-400" />
+              <span>كونوا على الموعد... الإطلاق في التحديث القريب جداً!</span>
+            </div>
+            <button
+              onClick={() => setShowComingSoonModal(false)}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-black text-xs transition-all shadow-md cursor-pointer"
+            >
+              متحمسين ومستعدين! 🔥
+            </button>
           </div>
         </div>
       )}
