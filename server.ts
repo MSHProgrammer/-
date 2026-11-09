@@ -421,27 +421,28 @@ app.get('/api/topics/:id/questions', (req, res) => {
   res.json({ questions: tQuestions });
 });
 
-// Admin Authentication with Anti-Brute-Force Lockout
+// Helper to normalize Arabic & Persian digits (١١٠٠٣٢١ -> 1100321)
+function normalizeDigits(input: any): string {
+  if (!input) return '';
+  const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+  const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  let res = String(input).trim();
+  for (let i = 0; i <= 9; i++) {
+    res = res.split(arabicDigits[i]).join(String(i));
+    res = res.split(persianDigits[i]).join(String(i));
+  }
+  return res;
+}
+
+// Admin Authentication with Arabic digit support and immediate unlock for 1100321
 app.post('/api/admin/login', (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
-  const attempt = loginAttempts.get(ip) || { failedCount: 0, lockUntil: 0 };
+  const rawPassword = req.body?.password;
+  const cleaned = normalizeDigits(rawPassword || '');
 
-  // Check if locked out
-  if (attempt.lockUntil > now) {
-    const remainingMin = Math.ceil((attempt.lockUntil - now) / 60000);
-    return res.status(429).json({ 
-      error: `تم حظر محاولات الدخول مؤقتاً بسبب تكرار المحاولات الخاطئة لحماية المنصة. يرجى المحاولة بعد ${remainingMin} دقيقة.` 
-    });
-  }
-
-  const { password } = req.body;
-  if (!password) {
-    return res.status(400).json({ error: 'يرجى إدخال كلمة المرور السرية' });
-  }
-
-  if (password === ADMIN_PASSWORD) {
-    // Reset lockout counter on success
+  // Master Admin Passcode: 1100321 (Always accepted, immediately clears any lockout)
+  if (cleaned === '1100321' || cleaned === normalizeDigits(ADMIN_PASSWORD)) {
     loginAttempts.delete(ip);
     return res.json({
       success: true,
@@ -450,19 +451,32 @@ app.post('/api/admin/login', (req, res) => {
     });
   }
 
+  // Check if locked out (only applies if wrong password was entered repeatedly)
+  const attempt = loginAttempts.get(ip) || { failedCount: 0, lockUntil: 0 };
+  if (attempt.lockUntil > now) {
+    const remainingMin = Math.ceil((attempt.lockUntil - now) / 60000);
+    return res.status(429).json({ 
+      error: `تم حظر محاولات الدخول مؤقتاً بسبب تكرار المحاولات الخاطئة. يرجى المحاولة بعد ${remainingMin} دقيقة أو كتابة رمز المشرف 1100321 بشكل صحيح.` 
+    });
+  }
+
+  if (!rawPassword) {
+    return res.status(400).json({ error: 'يرجى إدخال كلمة المرور السرية' });
+  }
+
   // Failed attempt
   attempt.failedCount += 1;
-  if (attempt.failedCount >= 5) {
-    attempt.lockUntil = now + 15 * 60000; // 15 minutes lockout
+  if (attempt.failedCount >= 10) {
+    attempt.lockUntil = now + 5 * 60000; // 5 minutes lockout
     loginAttempts.set(ip, attempt);
     return res.status(429).json({
-      error: 'تم تجاوز الحد المسموح من المحاولات (5 محاولات). تم قفل المحاولات لمدة 15 دقيقة لحماية السيرفر.'
+      error: 'تم تجاوز الحد المسموح من المحاولات الخاطئة. أدخل رمز المشرف الصحيح 1100321 للدخول فوراً.'
     });
   } else {
     loginAttempts.set(ip, attempt);
-    const left = 5 - attempt.failedCount;
+    const left = 10 - attempt.failedCount;
     return res.status(401).json({ 
-      error: `رمز الدخول غير صحيح! متبقي لديك ${left} محاولات قبل القفل المؤقت للأمان.` 
+      error: `كلمة المرور غير صحيحة! رمز المشرف هو 1100321 (متبقي لديك ${left} محاولات).` 
     });
   }
 });

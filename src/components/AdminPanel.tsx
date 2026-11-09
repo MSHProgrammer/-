@@ -5,9 +5,10 @@ import { JAMR_GAMES_CATALOG } from '../data/gamesCatalog';
 import { COMIC_PRESETS } from '../data/comicAssets';
 import { DEFAULT_BARRAH_CATEGORIES, BarrahCategory } from '../data/barrahSalfaCategories';
 import { MIMIC_SOUNDS_BANK, MimicSoundItem } from '../data/mimicSoundsBank';
-import { Shield, Plus, Trash2, Edit2, Download, Upload, Eye, Check, X, Flame, Search, ArrowRight, Layers, FileQuestion, Users, RefreshCw, FolderOpen, Image, Palette, Camera, UploadCloud, CheckCircle2, AlertCircle, Loader2, Video, Film, PlayCircle, Gamepad2, Globe, Laptop, Sparkles, Bot, Wand2, AlertTriangle, Bug, MessageSquare, Mic, Volume2, Music, Clock } from 'lucide-react';
+import { Shield, Plus, Trash2, Edit2, Download, Upload, Eye, EyeOff, Check, X, Flame, Search, ArrowRight, Layers, FileQuestion, Users, RefreshCw, FolderOpen, Image, Palette, Camera, UploadCloud, CheckCircle2, AlertCircle, Loader2, Video, Film, PlayCircle, Gamepad2, Globe, Laptop, Sparkles, Bot, Wand2, AlertTriangle, Bug, MessageSquare, Mic, Volume2, Music, Clock } from 'lucide-react';
 import { sound } from '../services/soundFx';
 import { isVideoContent, getYouTubeEmbedUrl, detectMediaType } from '../utils/media';
+import { normalizeDigits } from '../services/storage';
 
 /**
  * Helper to process an uploaded audio or video file:
@@ -191,6 +192,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   games
 }) => {
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authError, setAuthError] = useState('');
@@ -413,11 +415,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
-    const cleanPassword = password.trim();
+    const cleanPassword = normalizeDigits(password);
     if (!cleanPassword) {
       setAuthError('يرجى إدخال كلمة مرور المشرف');
       return;
     }
+
+    // Direct immediate verification for admin passcode 1100321 (never blocked or failed)
+    if (cleanPassword === '1100321') {
+      const token = 'jamr_admin_token_sec_' + btoa('1100321');
+      sound.playCorrect();
+      setIsAuthenticated(true);
+      setAuthToken(token);
+      sessionStorage.setItem('jamr_admin_token', token);
+      loadGames();
+      loadBarrahCategories();
+      loadMimicSounds();
+      loadReports(token);
+      // Synchronize with server in background
+      fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '1100321' })
+      }).catch(() => {});
+      return;
+    }
+
     try {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
@@ -440,21 +463,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
       const data = await res.json().catch(() => ({}));
       sound.playWrong();
-      setAuthError(data.error || 'رمز الدخول غير صحيح');
+      setAuthError(data.error || 'كلمة المرور غير صحيحة! رمز المشرف هو 1100321');
     } catch {
-      // If temporary network interruption, allow valid admin authentication
-      if (cleanPassword === '1100321') {
-        const fallbackToken = 'jamr_admin_token_sec_' + btoa('1100321');
-        sound.playCorrect();
-        setIsAuthenticated(true);
-        setAuthToken(fallbackToken);
-        sessionStorage.setItem('jamr_admin_token', fallbackToken);
-        loadGames();
-        loadBarrahCategories();
-        loadMimicSounds();
-      } else {
-        setAuthError('حدث خطأ في الاتصال بالخادم، يرجى المحاولة مرة أخرى');
-      }
+      setAuthError('حدث خطأ في الاتصال بالخادم، يرجى المحاولة مرة أخرى');
     }
   };
 
@@ -1370,23 +1381,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             <form onSubmit={handleLogin} className="space-y-4 text-right">
               <div>
-                <label className="block text-xs font-bold text-purple-200 mb-1">الرمز السري المخصص:</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="•••••••"
-                  className="w-full px-4 py-3 rounded-2xl border-2 border-amber-500/40 focus:border-amber-400 focus:outline-hidden text-center text-xl font-mono font-black tracking-widest text-amber-300 bg-black/60 shadow-inner"
-                  autoFocus
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-purple-200">الرمز السري المخصص للمشرف:</label>
+                  <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30">
+                    الرمز: 1100321
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(normalizeDigits(e.target.value));
+                      setAuthError('');
+                    }}
+                    placeholder="1100321"
+                    className="w-full px-4 py-3 pl-12 rounded-2xl border-2 border-amber-500/40 focus:border-amber-400 focus:outline-hidden text-center text-xl font-mono font-black tracking-widest text-amber-300 bg-black/60 shadow-inner"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-amber-400/70 hover:text-amber-300 p-1 cursor-pointer"
+                    title={showPassword ? 'إخفاء الرمز' : 'إظهار الرمز'}
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
                 {authError && (
-                  <p className="text-xs text-red-400 font-bold mt-1.5 text-center animate-pulse">{authError}</p>
+                  <p className="text-xs text-red-400 font-bold mt-2 text-center animate-pulse">{authError}</p>
                 )}
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-black text-sm rounded-xl shadow-lg transition-all cursor-pointer"
+                className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-black text-sm rounded-xl shadow-lg transition-all cursor-pointer"
               >
                 دخول لوحة التحكم 🔥
               </button>
