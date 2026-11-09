@@ -28,7 +28,7 @@ export interface GameInfo {
   tags: string[];
   supportsOffline: boolean;
   supportsOnline: boolean;
-  engineType: 'jamrain' | 'huroof' | 'mafia' | 'barrah_salfa' | 'sound_mimic' | 'broken_tv' | 'trivia' | 'taboo' | 'who_among_us' | 'fact_or_fiction' | 'sketch' | 'this_or_that';
+  engineType: 'jamrain' | 'huroof' | 'mafia' | 'barrah_salfa' | 'sound_mimic' | 'broken_tv' | 'ism_hayawan' | 'trivia' | 'taboo' | 'who_among_us' | 'fact_or_fiction' | 'sketch' | 'this_or_that';
   submittedBy?: string;
   submissionStatus?: 'approved' | 'pending' | 'rejected';
 }

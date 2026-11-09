@@ -637,8 +637,8 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
             </div>
           </div>
 
-          {/* 100 Topics Grid with Direct "صح" Button on Each Card */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {/* 100 Topics Grid with Enormous Distinct Comic Badges & Direct "صح" Button on Each Card */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {ALL_100_JAMRAIN_TOPICS
               .filter(t => topicCategoryFilter === 'all' || t.category === topicCategoryFilter)
               .filter(t => !topicSearch || t.title.includes(topicSearch) || t.description.includes(topicSearch))
@@ -652,65 +652,67 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                   <div
                     key={t.id}
                     onClick={() => handleToggleTopic(t.id)}
-                    className={`p-4 rounded-3xl border-2 transition-all cursor-pointer flex flex-col justify-between text-right relative overflow-hidden group ${
+                    className={`rounded-3xl border-2 transition-all cursor-pointer flex flex-col justify-between overflow-hidden group shadow-xl ${
                       isStaged
-                        ? 'border-emerald-400 bg-emerald-950/60 ring-4 ring-emerald-400/50 shadow-2xl scale-[1.03]'
+                        ? 'border-emerald-400 ring-4 ring-emerald-400/60 shadow-2xl scale-[1.03] bg-emerald-950/40'
                         : isTeam1
-                        ? 'border-amber-400 bg-amber-500/20 shadow-xl shadow-amber-500/20'
+                        ? 'border-amber-400 shadow-amber-500/30 ring-2 ring-amber-400/50 bg-[#16082a]'
                         : isTeam2
-                        ? 'border-purple-400 bg-purple-600/30 shadow-xl shadow-purple-600/20'
-                        : 'border-purple-800/40 bg-[#140624] hover:border-amber-400/60 hover:bg-purple-950/40'
+                        ? 'border-purple-400 shadow-purple-600/30 ring-2 ring-purple-400/50 bg-[#16082a]'
+                        : 'border-purple-800/40 bg-[#140624] hover:border-amber-400/60 hover:bg-purple-950/40 hover:scale-[1.02]'
                     }`}
                   >
-                    {/* Selection Badges */}
-                    {isSelected && (
-                      <div className={`absolute top-2 left-2 px-2.5 py-0.5 rounded-full font-black text-[10px] shadow-md flex items-center gap-1 ${
-                        isTeam1 ? 'bg-amber-400 text-black' : 'bg-purple-500 text-white'
-                      }`}>
-                        <Check className="w-3 h-3" />
-                        <span>{isTeam1 ? teams[0].name : teams[1].name}</span>
-                      </div>
-                    )}
-
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="w-12 h-12 rounded-2xl bg-[#200b3b] border border-purple-500/40 p-1 shrink-0 flex items-center justify-center overflow-hidden shadow-inner">
+                    {/* The Reference Comic Card Layout (IMG_3997_44c317c5.jpeg) - HUGE SIZE */}
+                    <div className="flex flex-col rounded-2xl overflow-hidden border-2 border-slate-300 shadow-md bg-[#ddf0f9] m-2.5">
+                      {/* Upper Comic Illustration Canvas: Much Bigger Dimensions */}
+                      <div className="w-full h-56 sm:h-64 p-3 flex items-center justify-center relative overflow-hidden bg-[#ddf0f9]">
                         <JamrainIllustration
                           topicTitle={t.title}
                           type={t.svgType}
                           icon={t.icon}
-                          className="w-full h-full object-contain"
+                          className="w-full h-full object-contain filter drop-shadow-sm"
                         />
+                        {isSelected && (
+                          <div className={`absolute top-2.5 left-2.5 px-3 py-1 rounded-full font-black text-xs shadow-lg flex items-center gap-1.5 border border-black/20 ${
+                            isTeam1 ? 'bg-amber-400 text-black' : 'bg-purple-600 text-white'
+                          }`}>
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                            <span>{isTeam1 ? teams[0].name : teams[1].name}</span>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-black text-white leading-snug">
+
+                      {/* Bottom: The Solid Orange Terracotta Banner */}
+                      <div className="w-full bg-[#f06634] py-3 px-3 flex items-center justify-center text-center shadow-inner">
+                        <span className="font-black text-white text-sm sm:text-base tracking-wide leading-tight drop-shadow-sm">
                           {t.title}
-                        </h3>
-                        <span className="text-[11px] text-amber-300 font-bold block mt-0.5">
-                          {t.categoryLabel}
                         </span>
                       </div>
                     </div>
 
-                    <p className="text-xs text-purple-200/80 leading-relaxed my-2 pt-2 border-t border-purple-900/40">
-                      {t.description}
-                    </p>
+                    <div className="p-3.5 pt-0 space-y-2.5 text-right">
+                      <div className="flex items-center justify-between text-xs pt-1">
+                        <span className="text-amber-300 font-bold">{t.categoryLabel}</span>
+                        <span className="text-purple-300/70 text-[11px] font-mono">60 سؤالاً متاحاً</span>
+                      </div>
 
-                    {/* Prominent "صح" Confirmation Button */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleConfirmTopicToSlot(t.id);
-                      }}
-                      className={`w-full py-2.5 px-3 rounded-2xl font-black text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
-                        isStaged
-                          ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/40 animate-bounce'
-                          : 'bg-emerald-600/80 hover:bg-emerald-500 text-white border border-emerald-400/40'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
-                      <span>صح ✓ (اعتماد لـ {slotNames[activeSlotIdx]})</span>
-                    </button>
+                      {/* Direct "صح" Confirmation Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleConfirmTopicToSlot(t.id);
+                        }}
+                        className={`w-full py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm shadow-lg flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                          isStaged
+                            ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/40 animate-bounce'
+                            : 'bg-emerald-600/85 hover:bg-emerald-500 text-white border border-emerald-400/40'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                        <span>صح ✓ (اعتماد لـ {slotNames[activeSlotIdx]})</span>
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -870,14 +872,21 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
                       })}
                     </div>
 
-                    {/* CENTER PURPLE CARD WITH TOPIC ILLUSTRATION */}
-                    <div className="w-[110px] h-[130px] sm:w-[140px] sm:h-[160px] bg-[#4c359e] rounded-2xl shadow-xl border-2 border-[#3c2a82] overflow-hidden p-2.5 flex items-center justify-center relative shrink-0">
-                      <JamrainIllustration
-                        topicTitle={topic.title}
-                        type={topic.svgType}
-                        icon={topic.icon}
-                        className="w-full h-full object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.3)]"
-                      />
+                    {/* CENTER COMIC CARD WITH TOPIC ILLUSTRATION (IMG_3997_44c317c5.jpeg) - PROMINENT HERO SIZE */}
+                    <div className="w-[145px] h-[180px] sm:w-[185px] sm:h-[225px] md:w-[160px] md:h-[200px] lg:w-[195px] lg:h-[240px] xl:w-[215px] xl:h-[260px] bg-[#ddf0f9] rounded-2xl sm:rounded-3xl shadow-2xl border-2 sm:border-3 border-slate-300 overflow-hidden flex flex-col items-center justify-between relative shrink-0 transition-transform hover:scale-[1.03]">
+                      <div className="w-full flex-1 p-2 flex items-center justify-center overflow-hidden bg-[#ddf0f9]">
+                        <JamrainIllustration
+                          topicTitle={topic.title}
+                          type={topic.svgType}
+                          icon={topic.icon}
+                          className="w-full h-full object-contain filter drop-shadow-sm"
+                        />
+                      </div>
+                      <div className="w-full bg-[#f06634] py-1.5 sm:py-2 px-2 text-center shrink-0 shadow-inner">
+                        <span className="text-white font-black text-xs sm:text-sm truncate block leading-tight drop-shadow-sm">
+                          {topic.title}
+                        </span>
+                      </div>
                     </div>
 
                     {/* RIGHT WING: [200, 400, 600] Point Pills */}
@@ -1019,18 +1028,18 @@ export const JamrainEngine: React.FC<JamrainEngineProps> = ({ onExit }) => {
             
             {/* Header info */}
             <div className="flex items-center justify-between border-b border-purple-800/40 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#4c359e] border border-purple-600/60 flex items-center justify-center p-1">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-[#ddf0f9] border-2 border-slate-300 shadow-lg flex items-center justify-center p-1.5 shrink-0 overflow-hidden">
                   <JamrainIllustration
                     topicTitle={activeQuestion.topic.title}
                     type={activeQuestion.topic.svgType}
                     icon={activeQuestion.topic.icon}
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-contain filter drop-shadow-sm"
                   />
                 </div>
                 <div>
-                  <div className="text-xs text-amber-400 font-black">{activeQuestion.topic.title}</div>
-                  <div className="text-xl font-black text-white">{activeQuestion.points} نقطة</div>
+                  <div className="text-sm sm:text-base text-amber-400 font-black">{activeQuestion.topic.title}</div>
+                  <div className="text-2xl sm:text-3xl font-black text-white">{activeQuestion.points} نقطة</div>
                 </div>
               </div>
 

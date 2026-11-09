@@ -194,7 +194,7 @@ class SocketClient {
     }
   }
 
-  public async createRoom(playerName: string, avatar: string, gameId: string) {
+  public async createRoom(playerName: string, avatar: string, gameId: string, options?: any) {
     this.myPlayerName = playerName;
     this.myAvatar = avatar;
 
@@ -206,7 +206,8 @@ class SocketClient {
         type: 'create_room',
         playerName,
         avatar,
-        gameId
+        gameId,
+        ...(options || {})
       });
       return;
     }

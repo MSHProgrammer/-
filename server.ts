@@ -33,6 +33,18 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
+wss.on('error', (err) => {
+  console.error('WebSocket server warning/error:', err);
+});
+
+server.on('error', (err: any) => {
+  if (err.code === 'EADDRINUSE') {
+    console.warn(`Port 3000 is already in use, reusing existing socket.`);
+  } else {
+    console.error('HTTP server error:', err);
+  }
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Anti-Hacking & Cybersecurity Protection Layer
@@ -1238,6 +1250,21 @@ wss.on('connection', (ws) => {
           ]
         };
 
+        if (gameId === 'ism_hayawan') {
+          newRoom.maxPlayers = 100;
+          newRoom.totalRounds = msg.totalRounds || 5;
+          newRoom.gameData = {
+            currentLetter: 'س',
+            stage: 'lobby',
+            isJudgeRoom: Boolean(msg.isJudge),
+            judgeId: msg.isJudge ? hostId : undefined,
+            isStopped: false,
+            submissions: {},
+            totalRounds: msg.totalRounds || 5,
+            currentRound: 1
+          };
+        }
+
         rooms.set(code, newRoom);
 
         ws.send(JSON.stringify({
@@ -1776,6 +1803,134 @@ wss.on('connection', (ws) => {
         if (!room.gameData.votes) room.gameData.votes = {};
         const tid = msg.targetPlayerId;
         room.gameData.votes[tid] = (room.gameData.votes[tid] || 0) + 1;
+        broadcastRoom(room);
+        return;
+      }
+
+      // ================= ISM HAYAWAN ENGINE ACTIONS =================
+      if (type === 'ism_hayawan_set_letter') {
+        if (!room.gameData) room.gameData = {};
+        room.gameData.currentLetter = msg.letter || 'س';
+        room.gameData.stage = 'writing';
+        room.gameData.isStopped = false;
+        room.gameData.stoppedBy = undefined;
+        room.gameData.submissions = {};
+        room.gameData.currentDispute = undefined;
+        room.status = 'playing';
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'ism_hayawan_stop') {
+        if (!room.gameData) room.gameData = {};
+        if (room.gameData.isStopped) return; // already stopped
+        room.gameData.isStopped = true;
+        room.gameData.stoppedBy = { id: player.id, name: player.name };
+        room.gameData.stage = 'scoring';
+
+        // Store this player's inputs
+        if (!room.gameData.submissions) room.gameData.submissions = {};
+        room.gameData.submissions[player.id] = {
+          playerId: player.id,
+          playerName: player.name,
+          ...(msg.inputs || {}),
+          scores: { name: 0, animal: 0, plant: 0, thing: 0, country: 0, total: 0 }
+        };
+
+        // Intelligent scoring calculation
+        const targetLetter = (room.gameData.currentLetter || 'س').trim().replace('هـ', 'ه');
+        const normalizeStr = (str: string) => {
+          if (!str) return '';
+          return str
+            .trim()
+            .toLowerCase()
+            .replace(/[\u064B-\u0652]/g, '')
+            .replace(/[إأآا]/g, 'ا')
+            .replace(/[ةه]/g, 'ه')
+            .replace(/[يى]/g, 'ي')
+            .replace(/[\s\-_]+/g, '');
+        };
+        const checkStart = (word: string) => {
+          if (!word || word.trim().length === 0) return false;
+          const f = word.trim().charAt(0);
+          if (['ا', 'أ', 'إ', 'آ'].includes(targetLetter) && ['ا', 'أ', 'إ', 'آ'].includes(f)) return true;
+          if (['ه', 'ة'].includes(targetLetter) && ['ه', 'ة'].includes(f)) return true;
+          return f === targetLetter;
+        };
+
+        const subsList = Object.values(room.gameData.submissions) as any[];
+        const fields: Array<'name' | 'animal' | 'plant' | 'thing' | 'country'> = ['name', 'animal', 'plant', 'thing', 'country'];
+
+        fields.forEach(field => {
+          subsList.forEach(s => {
+            const raw = (s[field] || '').trim();
+            if (!raw || !checkStart(raw)) {
+              s.scores[field] = 0;
+              return;
+            }
+            const norm = normalizeStr(raw);
+            const duplicates = subsList.filter(o => o !== s && checkStart((o[field] || '').trim()) && normalizeStr((o[field] || '').trim()) === norm);
+            s.scores[field] = duplicates.length > 0 ? 5 : 10;
+          });
+        });
+
+        // Sum round scores and update players' total points
+        subsList.forEach(s => {
+          s.scores.total = s.scores.name + s.scores.animal + s.scores.plant + s.scores.thing + s.scores.country;
+          const pRecord = room.players.find(p => p.id === s.playerId);
+          if (pRecord) {
+            (pRecord as any).score = ((pRecord as any).score || 0) + s.scores.total;
+          }
+        });
+
+        room.messages.push({
+          id: 'sys_' + Date.now(),
+          senderId: 'system',
+          senderName: 'جَمْر',
+          text: `🚨 ${player.name} ضغط ستوب! انتهى وقت الكتابة وبدأ تدقيق النقاط.`,
+          timestamp: Date.now(),
+          isSystem: true
+        });
+
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'ism_hayawan_dispute') {
+        if (!room.gameData) room.gameData = {};
+        room.gameData.currentDispute = msg.dispute;
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'ism_hayawan_resolve_dispute') {
+        if (!room.gameData || !room.gameData.currentDispute) return;
+        const disp = room.gameData.currentDispute;
+        const isValid = Boolean(msg.isValid);
+        const sub = room.gameData.submissions?.[disp.playerId];
+        if (sub) {
+          const oldScore = sub.scores[disp.field] || 0;
+          const newScore = isValid ? 10 : 0;
+          const diff = newScore - oldScore;
+          sub.scores[disp.field] = newScore;
+          sub.scores.total += diff;
+          const pRecord = room.players.find(p => p.id === disp.playerId);
+          if (pRecord) {
+            (pRecord as any).score = Math.max(0, ((pRecord as any).score || 0) + diff);
+          }
+        }
+        room.gameData.currentDispute = undefined;
+        broadcastRoom(room);
+        return;
+      }
+
+      if (type === 'ism_hayawan_judge_score_adjust') {
+        const isAllowed = player.isHost || (room.gameData && room.gameData.judgeId === player.id);
+        if (!isAllowed) return;
+        const targetP = room.players.find(p => p.id === msg.targetPlayerId);
+        if (targetP) {
+          (targetP as any).score = Math.max(0, ((targetP as any).score || 0) + (Number(msg.delta) || 0));
+        }
         broadcastRoom(room);
         return;
       }

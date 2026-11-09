@@ -11,6 +11,7 @@ import { HuroofJamrEngine } from './engines/HuroofJamrEngine';
 import { MafiaNoHakamEngine } from './engines/MafiaNoHakamEngine';
 import { BarrahSalfaEngine } from './engines/BarrahSalfaEngine';
 import { SoundMimicEngine } from './engines/SoundMimicEngine';
+import { IsmHayawanEngine } from './engines/IsmHayawanEngine';
 
 interface OfflineGameRunnerProps {
   initialGame?: GameInfo | null;
@@ -109,6 +110,14 @@ export const OfflineGameRunner: React.FC<OfflineGameRunnerProps> = ({
 
       {selectedGame.engineType === 'sound_mimic' && (
         <SoundMimicEngine
+          mode="offline"
+          players={[]}
+          onExit={onExit}
+        />
+      )}
+
+      {selectedGame.engineType === 'ism_hayawan' && (
+        <IsmHayawanEngine
           mode="offline"
           players={[]}
           onExit={onExit}

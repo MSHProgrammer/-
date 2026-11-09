@@ -12,6 +12,7 @@ import { BarrahSalfaEngine } from './engines/BarrahSalfaEngine';
 import { MafiaNoHakamEngine } from './engines/MafiaNoHakamEngine';
 import { SoundMimicEngine } from './engines/SoundMimicEngine';
 import { BrokenTvEngine } from './engines/BrokenTvEngine';
+import { IsmHayawanEngine } from './engines/IsmHayawanEngine';
 
 interface OnlineGameViewProps {
   initialAction?: 'create' | 'join';
@@ -50,6 +51,8 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
   const [chatInput, setChatInput] = useState('');
   const [showChat, setShowChat] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isJudge, setIsJudge] = useState(false);
+  const [ismRounds, setIsmRounds] = useState(5);
 
   const myPlayerId = socket.getPlayerId();
 
@@ -98,7 +101,11 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
     setErrorMessage(null);
     sounds.playSpark();
     try {
-      await socket.createRoom(playerName.trim(), selectedAvatar, selectedGameId);
+      await socket.createRoom(playerName.trim(), selectedAvatar, selectedGameId, {
+        isJudge,
+        totalRounds: ismRounds,
+        maxPlayers: selectedGameId === 'ism_hayawan' ? 100 : 16
+      });
     } catch (err: any) {
       setIsSubmitting(false);
       setErrorMessage(err?.message || 'حدث خطأ أثناء إنشاء الغرفة. يرجى إعادة المحاولة.');
@@ -300,6 +307,41 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
                     ))}
                   </select>
                 </div>
+
+                {/* Specific Options for ism_hayawan */}
+                {selectedGameId === 'ism_hayawan' && (
+                  <div className="p-3.5 rounded-2xl bg-[#140624] border border-emerald-500/50 space-y-3">
+                    <div className="flex items-center justify-between text-xs font-bold text-purple-200">
+                      <span>عدد الجولات:</span>
+                      <span className="text-emerald-400 font-black">{ismRounds} جولات</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="50"
+                      value={ismRounds}
+                      onChange={(e) => setIsmRounds(Number(e.target.value))}
+                      className="w-full accent-emerald-500 cursor-pointer"
+                    />
+
+                    {/* Judge Mode Toggle */}
+                    <div
+                      onClick={() => setIsJudge(!isJudge)}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                        isJudge ? 'border-amber-400 bg-amber-500/20' : 'border-purple-800/60 bg-black/40'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-xl">⚖️</span>
+                        <div className="text-right">
+                          <div className="text-xs font-black text-amber-300">خيار {`{بكون حكم! ⚖️}`}</div>
+                          <div className="text-[10px] text-purple-300">تصلك كل الاعتراضات وترى إجابات اللاعبين وتدير النقاط</div>
+                        </div>
+                      </div>
+                      <input type="checkbox" checked={isJudge} onChange={() => {}} className="w-4 h-4 accent-amber-500 pointer-events-none" />
+                    </div>
+                  </div>
+                )}
 
                 <button
                   type="submit"
@@ -571,6 +613,18 @@ export const OnlineGameView: React.FC<OnlineGameViewProps> = ({
                   mode="online"
                   players={room.players}
                   onlineRoomData={room.gameData}
+                  onExit={handleLeaveRoom}
+                />
+              )}
+
+              {room.gameId === 'ism_hayawan' && (
+                <IsmHayawanEngine
+                  mode="online"
+                  players={room.players}
+                  onlineRoomData={room.gameData}
+                  socket={socket}
+                  myPlayerId={myPlayerId || undefined}
+                  isJudge={isJudge || room.gameData?.judgeId === myPlayerId}
                   onExit={handleLeaveRoom}
                 />
               )}
